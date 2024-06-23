@@ -16,10 +16,9 @@ elseif (Q_WS_WIN OR WIN32)
 elseif (Q_OS_MAC OR APPLE)
     include(platform/mac/macplatform.cmake)
 else()
-    message(WARNING "Building on unsupported platfom!")
+    message(WARNING "Building on unsupported platform!")
     file(GLOB copyq_SOURCES ${copyq_SOURCES}
         platform/dummy/*.cpp
         )
     set(USE_QXT FALSE)
 endif()
-

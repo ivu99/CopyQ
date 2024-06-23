@@ -18,6 +18,29 @@ status are not restored after the application is restarted or after logging in.
 
     `Issue #1258 <https://github.com/hluk/CopyQ/issues/1258>`__
 
+.. _known-issue-windows-console-output:
+
+On Windows, CopyQ does not print anything on console
+----------------------------------------------------
+
+On Windows, you may not see any output when executing CopyQ in a
+console/terminal application (PowerShell or cmd).
+
+**Workarounds:**
+
+* Use different console application: Git Bash, Cygwin or similar.
+* Use Action dialog in CopyQ (``F5`` shortcut) and set "Store standard output"
+  to "text/plain" to save the output as new item in current tab.
+* Append ``| Write-Output`` to commands in PowerShell:
+
+  .. code-block:: powershell
+
+    & 'C:\Program Files\CopyQ\copyq.exe' help | Write-Output
+
+.. seealso::
+
+    `Issue #349 <https://github.com/hluk/CopyQ/issues/349>`__
+
 .. _known-issue-macos-paste-after-install:
 
 On macOS, CopyQ won't paste after installation/update
@@ -40,22 +63,25 @@ installed or updated.
 
 .. _known-issue-wayland:
 
-On Linux, global shortcuts and pasting doesn't work
----------------------------------------------------
+On Linux, global shortcuts, pasting or clipboard monitoring does not work
+-------------------------------------------------------------------------
 
-This can be caused by running Wayland instead of the old X11.
+This can be caused by running CopyQ under a **Wayland** window manager instead
+of the X11 server.
 
-Wayland doesn't support:
+Depending on the desktop environment, these features may not be supported:
 
 - global shortcuts
-- clipboard access from window that is not active
-- mouse selection copy/pasting
-- pasting from CopyQ (i.e. passing shortcuts to application)
+- clipboard monitoring
+- pasting from CopyQ and issuing copy command to other apps (that is passing
+  shortcuts to application)
+- screenshot functionality
+- querying keyboard modifiers and mouse position
 
 **Workaround** for most problems is to set ``QT_QPA_PLATFORM`` environment variable
 and use Xwayland (e.g. ``xorg-x11-server-Xwayland`` Fedora package).
 
-E.g. launch CopyQ with::
+For example, launch CopyQ with::
 
     env QT_QPA_PLATFORM=xcb copyq
 
@@ -70,5 +96,11 @@ If CopyQ autostarts, you can change ``Exec=...`` line in
     supports it.
 
 .. seealso::
+
+    `Wayland Support
+    <https://github.com/hluk/copyq-commands/tree/master/Scripts#wayland-support>`__
+    command reimplements some features on Wayland through external tools (see
+    `README <https://github.com/hluk/copyq-commands/blob/master/README.md>`__
+    for details on how to add the command.
 
     `Issue #27 <https://github.com/hluk/CopyQ/issues/27>`__

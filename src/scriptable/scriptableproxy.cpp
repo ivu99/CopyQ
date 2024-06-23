@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "scriptableproxy.h"
 
@@ -30,7 +13,6 @@
 #include "common/display.h"
 #include "common/log.h"
 #include "common/mimetypes.h"
-#include "common/settings.h"
 #include "common/sleeptimer.h"
 #include "common/textdata.h"
 #include "gui/clipboardbrowser.h"
@@ -41,6 +23,7 @@
 #include "gui/notification.h"
 #include "gui/pixelratio.h"
 #include "gui/screen.h"
+#include "gui/selectiondata.h"
 #include "gui/tabicons.h"
 #include "gui/traymenu.h"
 #include "gui/windowgeometryguard.h"
@@ -99,18 +82,46 @@ void registerMetaTypes() {
     if (registered)
         return;
 
-    qRegisterMetaType< QPointer<QWidget> >("QPointer<QWidget>");
+#if QT_VERSION < QT_VERSION_CHECK(6,0,0)
+    qRegisterMetaType<QPointer<QWidget>>("QPointer<QWidget>");
     qRegisterMetaTypeStreamOperators<ClipboardMode>("ClipboardMode");
     qRegisterMetaTypeStreamOperators<Command>("Command");
     qRegisterMetaTypeStreamOperators<NamedValueList>("NamedValueList");
-    qRegisterMetaTypeStreamOperators<NotificationButtons>("NotificationButtons");
-    qRegisterMetaTypeStreamOperators<ScriptablePath>("ScriptablePath");
+    qRegisterMetaTypeStreamOperators<NotificationButtonList>("NotificationButtonList");
     qRegisterMetaTypeStreamOperators<QVector<int>>("QVector<int>");
     qRegisterMetaTypeStreamOperators<QVector<Command>>("QVector<Command>");
-    qRegisterMetaTypeStreamOperators<QVector<QVariantMap>>("QVector<QVariantMap>");
-    qRegisterMetaTypeStreamOperators<Qt::KeyboardModifiers>("Qt::KeyboardModifiers");
+    qRegisterMetaTypeStreamOperators<VariantMapList>("VariantMapList");
+    qRegisterMetaTypeStreamOperators<KeyboardModifierList>("KeyboardModifierList");
+#else
+    qRegisterMetaType<QPointer<QWidget>>("QPointer<QWidget>");
+    qRegisterMetaType<ClipboardMode>("ClipboardMode");
+    qRegisterMetaType<Command>("Command");
+    qRegisterMetaType<NamedValueList>("NamedValueList");
+    qRegisterMetaType<NotificationButtonList>("NotificationButtonList");
+    qRegisterMetaType<QVector<int>>("QVector<int>");
+    qRegisterMetaType<QVector<Command>>("QVector<Command>");
+    qRegisterMetaType<VariantMapList>("VariantMapList");
+    qRegisterMetaType<KeyboardModifierList>("KeyboardModifierList");
+#endif
 
     registered = true;
+}
+
+template<typename Predicate>
+void selectionRemoveIf(QList<QPersistentModelIndex> *indexes, Predicate predicate)
+{
+    indexes->erase(
+        std::remove_if(indexes->begin(), indexes->end(), predicate),
+        indexes->end());
+}
+
+void selectionRemoveInvalid(QList<QPersistentModelIndex> *indexes)
+{
+    selectionRemoveIf(
+        indexes,
+        [](const QPersistentModelIndex &index){
+            return !index.isValid();
+        });
 }
 
 } // namespace
@@ -128,9 +139,30 @@ void registerMetaTypes() {
     emit sendMessage(f.serialize(functionCallId, args), CommandFunctionCall); \
 } while(false)
 
+#if QT_VERSION >= QT_VERSION_CHECK(6,0,0)
+#   define CHECK_STREAM_OPERATORS(CALL) \
+        static constexpr auto metaType = QMetaType::fromType<Result>(); \
+        COPYQ_LOG_VERBOSE( \
+            QStringLiteral("%1 invoking: %2 " CALL)\
+                .arg(m_wnd ? "Server" : "Client") \
+                .arg(metaType.name())); \
+        Q_ASSERT(metaType.hasRegisteredDataStreamOperators())
+#else
+#   define CHECK_STREAM_OPERATORS(CALL) \
+        if ( hasLogLevel(LogTrace) ) { \
+            static const auto metaTypeName = QMetaType::typeName(qMetaTypeId<Result>()); \
+            COPYQ_LOG_VERBOSE( \
+                QStringLiteral("%1 invoking: %2 " CALL)\
+                    .arg(m_wnd ? "Server" : "Client") \
+                    .arg(metaTypeName) \
+            ); \
+        }
+#endif
+
 #define INVOKE(FUNCTION, ARGUMENTS) do { \
+    using Result = decltype(FUNCTION ARGUMENTS); \
+    CHECK_STREAM_OPERATORS(STR(#FUNCTION #ARGUMENTS)); \
     if (!m_wnd) { \
-        using Result = decltype(FUNCTION ARGUMENTS); \
         const auto functionCallId = ++m_lastFunctionCallId; \
         INVOKE_(FUNCTION, ARGUMENTS, functionCallId); \
         const auto result = waitForFunctionCallFinished(functionCallId); \
@@ -149,28 +181,33 @@ void registerMetaTypes() {
 
 Q_DECLARE_METATYPE(QFile*)
 
-QDataStream &operator<<(QDataStream &out, const NotificationButton &button)
+QDataStream &operator<<(QDataStream &out, const NotificationButtonList &list)
 {
-    out << button.name
-        << button.script
-        << button.data;
+    out << list.items.size();
+    for (const auto &button : list.items)
+        out << button.name << button.script << button.data;
     Q_ASSERT(out.status() == QDataStream::Ok);
     return out;
 }
 
-QDataStream &operator>>(QDataStream &in, NotificationButton &button)
+QDataStream &operator>>(QDataStream &in, NotificationButtonList &list)
 {
-    in >> button.name
-       >> button.script
-       >> button.data;
+    decltype(list.items.size()) size;
+    in >> size;
+    list.items.reserve(size);
+    for (int i = 0; i < size; ++i) {
+        NotificationButton button;
+        in >> button.name >> button.script >> button.data;
+        list.items.append(button);
+    }
     Q_ASSERT(in.status() == QDataStream::Ok);
     return in;
 }
 
 QDataStream &operator<<(QDataStream &out, const NamedValueList &list)
 {
-    out << list.size();
-    for (const auto &item : list)
+    out << list.items.size();
+    for (const auto &item : list.items)
         out << item.name << item.value;
     Q_ASSERT(out.status() == QDataStream::Ok);
     return out;
@@ -178,71 +215,28 @@ QDataStream &operator<<(QDataStream &out, const NamedValueList &list)
 
 QDataStream &operator>>(QDataStream &in, NamedValueList &list)
 {
-    int size;
+    decltype(list.items.size()) size;
     in >> size;
+    list.items.reserve(size);
     for (int i = 0; i < size; ++i) {
         NamedValue item;
         in >> item.name >> item.value;
-        list.append(item);
+        list.items.append(item);
     }
     Q_ASSERT(in.status() == QDataStream::Ok);
     return in;
 }
 
-QDataStream &operator<<(QDataStream &out, const Command &command)
+QDataStream &operator<<(QDataStream &out, const VariantMapList &items)
 {
-    out << command.name
-        << command.re
-        << command.wndre
-        << command.matchCmd
-        << command.cmd
-        << command.sep
-        << command.input
-        << command.output
-        << command.wait
-        << command.automatic
-        << command.display
-        << command.inMenu
-        << command.isGlobalShortcut
-        << command.isScript
-        << command.transform
-        << command.remove
-        << command.hideWindow
-        << command.enable
-        << command.icon
-        << command.shortcuts
-        << command.globalShortcuts
-        << command.tab
-        << command.outputTab;
+    out << items.items;
     Q_ASSERT(out.status() == QDataStream::Ok);
     return out;
 }
 
-QDataStream &operator>>(QDataStream &in, Command &command)
+QDataStream &operator>>(QDataStream &in, VariantMapList &items)
 {
-    in >> command.name
-       >> command.re
-       >> command.wndre
-       >> command.matchCmd
-       >> command.cmd
-       >> command.sep
-       >> command.input
-       >> command.output
-       >> command.wait
-       >> command.automatic
-       >> command.display
-       >> command.inMenu
-       >> command.isGlobalShortcut
-       >> command.isScript
-       >> command.transform
-       >> command.remove
-       >> command.hideWindow
-       >> command.enable
-       >> command.icon
-       >> command.shortcuts
-       >> command.globalShortcuts
-       >> command.tab
-       >> command.outputTab;
+    in >> items.items;
     Q_ASSERT(in.status() == QDataStream::Ok);
     return in;
 }
@@ -264,27 +258,17 @@ QDataStream &operator>>(QDataStream &in, ClipboardMode &mode)
     return in;
 }
 
-QDataStream &operator<<(QDataStream &out, const ScriptablePath &path)
+QDataStream &operator<<(QDataStream &out, KeyboardModifierList value)
 {
-    return out << path.path;
+    return out << static_cast<int>(value.items);
 }
 
-QDataStream &operator>>(QDataStream &in, ScriptablePath &path)
-{
-    return in >> path.path;
-}
-
-QDataStream &operator<<(QDataStream &out, Qt::KeyboardModifiers value)
-{
-    return out << static_cast<int>(value);
-}
-
-QDataStream &operator>>(QDataStream &in, Qt::KeyboardModifiers &value)
+QDataStream &operator>>(QDataStream &in, KeyboardModifierList &value)
 {
     int valueInt;
     in >> valueInt;
     Q_ASSERT(in.status() == QDataStream::Ok);
-    value = static_cast<Qt::KeyboardModifiers>(valueInt);
+    value.items = static_cast<Qt::KeyboardModifiers>(valueInt);
     return in;
 }
 
@@ -322,7 +306,11 @@ public:
     {
         QByteArray bytes;
         QDataStream stream(&bytes, QIODevice::WriteOnly);
+#if QT_VERSION >= QT_VERSION_CHECK(6,0,0)
+        stream.setVersion(QDataStream::Qt_6_0);
+#else
         stream.setVersion(QDataStream::Qt_5_0);
+#endif
         stream << serializedFunctionCallMagicNumber << serializedFunctionCallVersion
                << functionCallId << m_slotName << args;
         return bytes;
@@ -371,7 +359,7 @@ public:
         QLabel::paintEvent(ev);
         if (selectionRect.isValid()) {
             QPainter p(this);
-            const auto w = pointsToPixels(1);
+            const auto w = pointsToPixels(1, this);
 
             p.setPen(QPen(Qt::white, w));
             p.drawRect(selectionRect);
@@ -498,7 +486,7 @@ QWidget *createListWidget(const QString &name, const QStringList &items, InputDi
             ? inputDialog->defaultChoice.toString()
             : items.value(0);
 
-    const QString listPrefix = ".list:";
+    const QLatin1String listPrefix(".list:");
     if ( name.startsWith(listPrefix) ) {
         QListWidget *w = createAndSetWidget<QListWidget>("currentRow", QVariant(), parent);
         w->addItems(items);
@@ -508,7 +496,7 @@ QWidget *createListWidget(const QString &name, const QStringList &items, InputDi
         w->setAlternatingRowColors(true);
         installShortcutToCloseDialog(parent, w, Qt::Key_Enter);
         installShortcutToCloseDialog(parent, w, Qt::Key_Return);
-        return label(Qt::Vertical, name.mid(listPrefix.length()), w);
+        return label(Qt::Vertical, name.mid(listPrefix.size()), w);
     }
 
     QComboBox *w = createAndSetWidget<QComboBox>("currentText", QVariant(), parent);
@@ -517,9 +505,16 @@ QWidget *createListWidget(const QString &name, const QStringList &items, InputDi
     w->setCurrentIndex(items.indexOf(currentText));
     w->lineEdit()->setText(currentText);
     w->lineEdit()->selectAll();
-    w->setMaximumWidth( pointsToPixels(400) );
+    w->setMaximumWidth( pointsToPixels(400, w) );
     installShortcutToCloseDialog(parent, w, Qt::Key_Enter);
     installShortcutToCloseDialog(parent, w, Qt::Key_Return);
+
+    const QLatin1String comboPrefix(".combo:");
+    if ( name.startsWith(comboPrefix) ) {
+        w->setEditable(false);
+        return label(Qt::Horizontal, name.mid(comboPrefix.size()), w);
+    }
+
     return label(Qt::Horizontal, name, w);
 }
 
@@ -590,9 +585,9 @@ QWidget *createWidget(const QString &name, const QVariant &value, InputDialog *i
     case QVariant::StringList:
         return createListWidget(name, value.toStringList(), inputDialog);
     default:
-        if ( value.userType() == qMetaTypeId<ScriptablePath>() ) {
-            const auto path = value.value<ScriptablePath>();
-            return createFileNameEdit(name, path.path, parent);
+        if ( value.type() == QVariant::Url ) {
+            const auto path = value.toUrl();
+            return createFileNameEdit(name, path.toLocalFile(), parent);
         }
 
         const QString text = value.toString();
@@ -611,8 +606,8 @@ void setGeometryWithoutSave(QWidget *window, QRect geometry)
             ? QCursor::pos()
             : geometry.topLeft();
 
-    const int w = pointsToPixels(geometry.width());
-    const int h = pointsToPixels(geometry.height());
+    const int w = pointsToPixels(geometry.width(), window);
+    const int h = pointsToPixels(geometry.height(), window);
     if (w > 0 && h > 0)
         window->resize(w, h);
 
@@ -627,18 +622,6 @@ QString tabNotFoundError()
 QString tabNameEmptyError()
 {
     return ScriptableProxy::tr("Tab name cannot be empty!");
-}
-
-void raiseWindow(QPointer<QWidget> window)
-{
-    window->raise();
-    window->activateWindow();
-    QApplication::setActiveWindow(window);
-    QApplication::processEvents();
-    const auto wid = window->winId();
-    const auto platformWindow = platformNativeInterface()->getWindow(wid);
-    if (platformWindow)
-        platformWindow->raise();
 }
 
 } // namespace
@@ -670,6 +653,7 @@ public:
         const auto currentWindow = platformNativeInterface()->getCurrentWindow();
         const auto currentWindowTitle = currentWindow ? currentWindow->getTitle() : QString();
         log( QString("Failed to send key press to target widget")
+            + QLatin1String(qApp->applicationState() == Qt::ApplicationActive ? "" : "\nApp is INACTIVE!")
             + "\nExpected: " + (expectedWidgetName.isEmpty() ? "Any" : expectedWidgetName)
             + "\nActual:   " + keyClicksTargetDescription(actual)
             + "\nPopup:    " + keyClicksTargetDescription(popup)
@@ -686,6 +670,16 @@ public:
     {
         auto widget = keyClicksTarget();
         if (!widget) {
+            keyClicksRetry(expectedWidgetName, keys, delay, retry);
+            return;
+        }
+
+        if (qApp->applicationState() != Qt::ApplicationActive) {
+#if defined(Q_OS_MAC) && QT_VERSION >= QT_VERSION_CHECK(6,0,0)
+            // WORKAROUND for focusing back to main window on macOS.
+            if (m_wnd->isVisible())
+                m_wnd->activateWindow();
+#endif
             keyClicksRetry(expectedWidgetName, keys, delay, retry);
             return;
         }
@@ -716,7 +710,6 @@ public:
         notification->setMessage(popupMessage);
         notification->setIcon(IconKeyboard);
         notification->setInterval(2000);
-        notification->show();
 
         if ( keys.startsWith(":") ) {
             const auto text = keys.mid(1);
@@ -835,7 +828,17 @@ ScriptableProxy::ScriptableProxy(MainWindow *mainWindow, QObject *parent)
     : QObject(parent)
     , m_wnd(mainWindow)
 {
+    connect( this, &ScriptableProxy::clientDisconnected,
+             this, [this]() {
+                 m_disconnected = true;
+                 emit abortEvaluation();
+             } );
+
     registerMetaTypes();
+#if QT_VERSION >= QT_VERSION_CHECK(6,0,0)
+    Q_ASSERT(QMetaType::fromType<Command>().hasRegisteredDataStreamOperators());
+    Q_ASSERT(QMetaType::fromType<ClipboardMode>().hasRegisteredDataStreamOperators());
+#endif
 }
 
 void ScriptableProxy::callFunction(const QByteArray &serializedFunctionCall)
@@ -925,7 +928,7 @@ QByteArray ScriptableProxy::callFunctionHelper(const QByteArray &serializedFunct
         auto &value = arguments[i];
         const int argumentTypeId = metaMethod.parameterType(i);
         if (argumentTypeId == QMetaType::QVariant) {
-            args[i] = Q_ARG(QVariant, value);
+            args[i] = QGenericArgument( "QVariant", static_cast<void*>(value.data()) );
         } else if ( value.userType() == argumentTypeId ) {
             args[i] = QGenericArgument( value.typeName(), static_cast<void*>(value.data()) );
         } else {
@@ -944,10 +947,17 @@ QByteArray ScriptableProxy::callFunctionHelper(const QByteArray &serializedFunct
         called = metaMethod.invoke(
                 this, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8]);
     } else {
+#if QT_VERSION >= QT_VERSION_CHECK(6,0,0)
+        const QMetaType metaType(typeId);
+        COPYQ_LOG_VERBOSE(QStringLiteral("Script function return type: %1").arg(metaType.name()));
+        Q_ASSERT(metaType.hasRegisteredDataStreamOperators());
+        returnValue = QVariant(metaType, nullptr);
+#else
         returnValue = QVariant(typeId, nullptr);
+#endif
         const auto genericReturnValue = returnValue.isValid()
-                ? QGenericReturnArgument(returnValue.typeName(), static_cast<void*>(returnValue.data()) )
-                : Q_RETURN_ARG(QVariant, returnValue);
+                ? QGenericReturnArgument( returnValue.typeName(), static_cast<void*>(returnValue.data()) )
+                : QGenericReturnArgument( "QVariant", static_cast<void*>(returnValue.data()) );
 
         called = metaMethod.invoke(
                 this, genericReturnValue,
@@ -964,6 +974,10 @@ QByteArray ScriptableProxy::callFunctionHelper(const QByteArray &serializedFunct
     {
         QDataStream stream(&bytes, QIODevice::WriteOnly);
         stream << functionCallId << returnValue;
+        if (stream.status() != QDataStream::Ok) {
+            log("Failed to write scriptable proxy slot call return value", LogError);
+            Q_ASSERT(false);
+        }
     }
 
     return bytes;
@@ -1255,7 +1269,7 @@ void ScriptableProxy::showMessage(const QString &title,
         const QString &icon,
         int msec,
         const QString &notificationId,
-        const NotificationButtons &buttons)
+        const NotificationButtonList &buttons)
 {
     INVOKE2(showMessage, (title, msg, icon, msec, notificationId, buttons));
 
@@ -1264,8 +1278,7 @@ void ScriptableProxy::showMessage(const QString &title,
     notification->setMessage(msg, Qt::AutoText);
     notification->setIcon(icon);
     notification->setInterval(msec);
-    notification->setButtons(buttons);
-    notification->show();
+    notification->setButtons(buttons.items);
 }
 
 QVariantMap ScriptableProxy::nextItem(const QString &tabName, int where)
@@ -1303,7 +1316,7 @@ QString ScriptableProxy::browserRemoveRows(const QString &tabName, QVector<int> 
     INVOKE(browserRemoveRows, (tabName, rows));
     ClipboardBrowser *c = fetchBrowser(tabName);
     if (!c)
-        return QLatin1String("Invalid tab");
+        return QStringLiteral("Invalid tab");
 
     std::sort( rows.begin(), rows.end(), std::greater<int>() );
 
@@ -1316,18 +1329,11 @@ QString ScriptableProxy::browserRemoveRows(const QString &tabName, QVector<int> 
             indexes.append(indexToRemove);
     }
 
-    const QPersistentModelIndex currentIndex = c->currentIndex();
-
     QString error;
-    const int lastRow = c->removeIndexes(indexes, &error);
+    c->removeIndexes(indexes, &error);
 
     if ( !error.isEmpty() )
         return error;
-
-    if ( !currentIndex.isValid() ) {
-        const int currentRow = qMin(lastRow, c->length() - 1);
-        c->setCurrent(currentRow);
-    }
 
     return QString();
 }
@@ -1336,30 +1342,29 @@ void ScriptableProxy::browserMoveSelected(int targetRow)
 {
     INVOKE2(browserMoveSelected, (targetRow));
 
-    const QList<QPersistentModelIndex> selected = selectedIndexes();
-    if ( selected.isEmpty() )
-        return;
-
-    ClipboardBrowser *c = m_wnd->browserForItem(selected.first());
+    QList<QPersistentModelIndex> selected = selectedIndexes();
+    selectionRemoveInvalid(&selected);
+    ClipboardBrowser *c = browserForIndexes(selected);
     if (c == nullptr)
         return;
 
     QModelIndexList indexes;
+    indexes.reserve(selected.size());
     for (const auto &index : selected)
         indexes.append(index);
     c->move(indexes, targetRow);
 }
 
-void ScriptableProxy::browserEditRow(const QString &tabName, int arg1)
+void ScriptableProxy::browserEditRow(const QString &tabName, int row, const QString &format)
 {
-    INVOKE2(browserEditRow, (tabName, arg1));
-    BROWSER(tabName, editRow(arg1));
+    INVOKE2(browserEditRow, (tabName, row, format));
+    BROWSER(tabName, editRow(row, format));
 }
 
-void ScriptableProxy::browserEditNew(const QString &tabName, const QString &arg1, bool changeClipboard)
+void ScriptableProxy::browserEditNew(const QString &tabName, const QString &format, const QByteArray &content, bool changeClipboard)
 {
-    INVOKE2(browserEditNew, (tabName, arg1, changeClipboard));
-    BROWSER(tabName, editNew(arg1, changeClipboard));
+    INVOKE2(browserEditNew, (tabName, format, content, changeClipboard));
+    BROWSER(tabName, editNew(format, content, changeClipboard));
 }
 
 QStringList ScriptableProxy::tabs()
@@ -1392,7 +1397,7 @@ int ScriptableProxy::findTabIndex(const QString &arg1)
     return m_wnd->findTabIndex(arg1);
 }
 
-int ScriptableProxy::menuItems(const QVector<QVariantMap> &items)
+int ScriptableProxy::menuItems(const VariantMapList &items)
 {
     INVOKE(menuItems, (items));
 
@@ -1402,7 +1407,7 @@ int ScriptableProxy::menuItems(const QVector<QVariantMap> &items)
 
     const auto addMenuItems = [&](const QString &searchText) {
         menu.clearClipboardItems();
-        for (const QVariantMap &data : items) {
+        for (const QVariantMap &data : items.items) {
             const QString text = getTextData(data);
             if ( text.contains(searchText, Qt::CaseInsensitive) )
                 menu.addClipboardItemAction(data, true);
@@ -1417,7 +1422,7 @@ int ScriptableProxy::menuItems(const QVector<QVariantMap> &items)
     if (act == nullptr)
         return -1;
 
-    return items.indexOf(act->data().toMap());
+    return items.items.indexOf(act->data().toMap());
 }
 
 void ScriptableProxy::openActionDialog(const QVariantMap &arg1)
@@ -1455,17 +1460,24 @@ bool ScriptableProxy::exportData(const QString &fileName)
     return m_wnd->exportAllData(fileName);
 }
 
-QVariant ScriptableProxy::config(const QStringList &nameValue)
+QVariant ScriptableProxy::config(const QVariantList &nameValue)
 {
     INVOKE(config, (nameValue));
     return m_wnd->config(nameValue);
+}
+
+QString ScriptableProxy::configDescription()
+{
+    INVOKE(configDescription, ());
+    return m_wnd->configDescription();
 }
 
 QVariant ScriptableProxy::toggleConfig(const QString &optionName)
 {
     INVOKE(toggleConfig, (optionName));
 
-    QStringList nameValue(optionName);
+    QVariantList nameValue;
+    nameValue.append(optionName);
     const auto values = m_wnd->config(nameValue);
     if ( values.type() == QVariant::StringList )
         return values;
@@ -1475,7 +1487,7 @@ QVariant ScriptableProxy::toggleConfig(const QString &optionName)
         return QVariant();
 
     const auto newValue = !QVariant(oldValue).toBool();
-    nameValue.append( QVariant(newValue).toString() );
+    nameValue.append(newValue);
     return m_wnd->config(nameValue).toMap().constBegin().value();
 }
 
@@ -1486,53 +1498,59 @@ int ScriptableProxy::browserLength(const QString &tabName)
     return c ? c->length() : 0;
 }
 
-bool ScriptableProxy::browserOpenEditor(const QString &tabName, const QByteArray &arg1, bool changeClipboard)
+bool ScriptableProxy::browserOpenEditor(
+    const QString &tabName, int row, const QString &format, const QByteArray &content, bool changeClipboard)
 {
-    INVOKE(browserOpenEditor, (tabName, arg1, changeClipboard));
+    INVOKE(browserOpenEditor, (tabName, row, format, content, changeClipboard));
     ClipboardBrowser *c = fetchBrowser(tabName);
-    return c && c->openEditor(arg1, changeClipboard);
+    if (!c)
+        return false;
+
+    const auto index = c->index(row);
+    return c->openEditor(index, format, content, changeClipboard);
 }
 
-QString ScriptableProxy::browserInsert(const QString &tabName, int row, const QVector<QVariantMap> &items)
+QString ScriptableProxy::browserInsert(const QString &tabName, int row, const VariantMapList &items)
 {
     INVOKE(browserInsert, (tabName, row, items));
 
     ClipboardBrowser *c = fetchBrowser(tabName);
     if (!c)
-        return QLatin1String("Invalid tab");
+        return QStringLiteral("Invalid tab");
 
-    if ( !c->allocateSpaceForNewItems(items.size()) )
-        return QLatin1String("Tab is full (cannot remove any items)");
+    if ( !c->allocateSpaceForNewItems(items.items.size()) )
+        return QStringLiteral("Tab is full (cannot remove any items)");
 
-    for (const auto &item : items) {
-        if ( !c->add(item, row) )
-            return QLatin1String("Failed to new add items");
-    }
+    if ( !c->addReversed(items.items, row) )
+        return QStringLiteral("Failed to add items");
 
     return QString();
 }
 
-QString ScriptableProxy::browserChange(const QString &tabName, int row, const QVector<QVariantMap> &items)
+QString ScriptableProxy::browserChange(const QString &tabName, int row, const VariantMapList &items)
 {
     INVOKE(browserChange, (tabName, row, items));
 
     ClipboardBrowser *c = fetchBrowser(tabName);
     if (!c)
-        return QLatin1String("Invalid tab");
+        return QStringLiteral("Invalid tab");
+
+    QMap<QPersistentModelIndex, QVariantMap> itemsData;
 
     int currentRow = row;
-    for (const auto &data : items) {
+    for (const auto &data : items.items) {
         const auto index = c->index(currentRow);
-        QVariantMap itemData = c->model()->data(index, contentType::data).toMap();
+        QVariantMap itemData = index.data(contentType::data).toMap();
         for (auto it = data.constBegin(); it != data.constEnd(); ++it) {
             if ( it.value().isValid() )
                 itemData.insert( it.key(), it.value() );
             else
                 itemData.remove( it.key() );
         }
-        c->model()->setData(index, itemData, contentType::data);
+        itemsData[index] = itemData;
         ++currentRow;
     }
+    c->setItemsData(itemsData);
 
     return QString();
 }
@@ -1566,8 +1584,7 @@ int ScriptableProxy::currentItem()
 {
     INVOKE(currentItem, ());
 
-    const QPersistentModelIndex current =
-            m_actionData.value(mimeCurrentItem).value<QPersistentModelIndex>();
+    const QPersistentModelIndex current = currentIndex();
     return current.isValid() ? current.row() : -1;
 }
 
@@ -1598,26 +1615,44 @@ QVector<int> ScriptableProxy::selectedItems()
     INVOKE(selectedItems, ());
 
     QVector<int> selectedRows;
-    const QList<QPersistentModelIndex> selected = selectedIndexes();
+    QList<QPersistentModelIndex> selected = selectedIndexes();
     selectedRows.reserve(selected.count());
-    for (const auto &index : selected) {
-        if (index.isValid())
-            selectedRows.append(index.row());
-    }
+
+    for (const auto &index : selected)
+        selectedRows.append(index.row());
 
     return selectedRows;
+}
+
+QString ScriptableProxy::selectedTab()
+{
+    INVOKE(selectedTab, ());
+
+    const QPersistentModelIndex current = currentIndex();
+    ClipboardBrowser *c = m_wnd->browserForItem(current);
+    if (c != nullptr)
+        return c->tabName();
+
+    const QList<QPersistentModelIndex> selected = selectedIndexes();
+    c = m_wnd->browserForItem(current);
+    if (c != nullptr)
+        return c->tabName();
+
+    return m_actionData.value(mimeCurrentTab).toString();
 }
 
 QVariantMap ScriptableProxy::selectedItemData(int selectedIndex)
 {
     INVOKE(selectedItemData, (selectedIndex));
 
-    auto c = currentBrowser();
-    if (!c)
-        return QVariantMap();
-
     const auto index = selectedIndexes().value(selectedIndex);
-    Q_ASSERT( !index.isValid() || index.model() == c->model() );
+    if ( !index.isValid() )
+        return {};
+
+    ClipboardBrowser *c = m_wnd->browserForItem(index);
+    if (c == nullptr)
+        return {};
+
     return c->copyIndex(index);
 }
 
@@ -1625,61 +1660,357 @@ bool ScriptableProxy::setSelectedItemData(int selectedIndex, const QVariantMap &
 {
     INVOKE(setSelectedItemData, (selectedIndex, data));
 
-    auto c = currentBrowser();
-    if (!c)
-        return false;
-
     const auto index = selectedIndexes().value(selectedIndex);
     if ( !index.isValid() )
         return false;
 
-    Q_ASSERT( index.model() == c->model() );
+    ClipboardBrowser *c = m_wnd->browserForItem(index);
+    if (c == nullptr)
+        return false;
+
     return c->model()->setData(index, data, contentType::data);
 }
 
-QVector<QVariantMap> ScriptableProxy::selectedItemsData()
+VariantMapList ScriptableProxy::selectedItemsData()
 {
     INVOKE(selectedItemsData, ());
 
-    auto c = currentBrowser();
-    if (!c)
-        return QVector<QVariantMap>();
-
-    const auto model = c->model();
+    QList<QPersistentModelIndex> selected = selectedIndexes();
+    ClipboardBrowser *c = browserForIndexes(selected);
+    if (c == nullptr)
+        return {QVector<QVariantMap>(selected.size(), {})};
 
     QVector<QVariantMap> dataList;
-    const auto selected = selectedIndexes();
     dataList.reserve(selected.size());
 
-    for (const auto &index : selected) {
-        if ( index.isValid() ) {
-            Q_ASSERT( index.model() == model );
-            dataList.append( c->copyIndex(index) );
-        }
-    }
+    for (const auto &index : selected)
+        dataList.append( c->copyIndex(index) );
 
-    return dataList;
+    return {dataList};
 }
 
-void ScriptableProxy::setSelectedItemsData(const QVector<QVariantMap> &dataList)
+void ScriptableProxy::setSelectedItemsData(const VariantMapList &dataList)
 {
     INVOKE2(setSelectedItemsData, (dataList));
 
-    auto c = currentBrowser();
-    if (!c)
+    const QList<QPersistentModelIndex> selected = selectedIndexes();
+    ClipboardBrowser *c = nullptr;
+    QMap<QPersistentModelIndex, QVariantMap> itemsData;
+    const auto count = std::min( selected.size(), dataList.items.size() );
+    for ( int i = 0; i < count; ++i ) {
+        const auto &index = selected[i];
+        if ( !index.isValid() )
+            continue;
+
+        if (c == nullptr)
+            c = m_wnd->browserForItem(index);
+
+        itemsData[index] = dataList.items[i];
+    }
+
+    if (c != nullptr)
+        c->setItemsData(itemsData);
+}
+
+int ScriptableProxy::createSelection(const QString &tabName)
+{
+    INVOKE(createSelection, (tabName));
+    const int newSelectionId = ++m_lastSelectionId;
+    ClipboardBrowser *c = fetchBrowser(tabName);
+    if (c)
+        m_selections[newSelectionId] = {c, {}};
+    return newSelectionId;
+}
+
+int ScriptableProxy::selectionCopy(int id)
+{
+    INVOKE(selectionCopy, (id));
+    const int newSelectionId = ++m_lastSelectionId;
+    auto selection = m_selections.value(id);
+    if (selection.browser)
+        m_selections[newSelectionId] = selection;
+    return newSelectionId;
+}
+
+void ScriptableProxy::destroySelection(int id)
+{
+    INVOKE2(destroySelection, (id));
+    m_selections.remove(id);
+}
+
+void ScriptableProxy::selectionRemoveAll(int id)
+{
+    INVOKE2(selectionRemoveAll, (id));
+    auto selection = m_selections.take(id);
+    if (!selection.browser)
+        return;
+    selectionRemoveInvalid(&selection.indexes);
+
+    QModelIndexList indexes;
+    for (const auto &index : selection.indexes)
+        indexes.append(index);
+
+    selection.browser->removeIndexes(indexes);
+
+    selectionRemoveInvalid(&selection.indexes);
+    m_selections[id] = selection;
+}
+
+void ScriptableProxy::selectionSelectRemovable(int id)
+{
+    INVOKE2(selectionSelectRemovable, (id));
+    auto selection = m_selections.take(id);
+    if (!selection.browser)
         return;
 
-    const auto model = c->model();
+    // Use error argument for canRemoveItems() to ensure that a message dialog is not shown.
+    QString error;
+    QList<QPersistentModelIndex> indexes;
+    for (int row = 0; row < selection.browser->length(); ++row) {
+        const auto index = selection.browser->index(row);
+        if ( !selection.indexes.contains(index) && selection.browser->canRemoveItems({index}, &error) )
+            indexes.append(index);
+    }
+    selection.indexes.append(indexes);
+    m_selections[id] = selection;
+}
 
-    const auto indexes = selectedIndexes();
-    const auto count = std::min( indexes.size(), dataList.size() );
-    for ( int i = 0; i < count; ++i ) {
-        const auto &index = indexes[i];
-        if ( index.isValid() ) {
-            Q_ASSERT( index.model() == model );
-            model->setData(index, dataList[i], contentType::data);
+void ScriptableProxy::selectionInvert(int id)
+{
+    INVOKE2(selectionInvert, (id));
+    auto selection = m_selections.take(id);
+    if (!selection.browser)
+        return;
+
+    QList<QPersistentModelIndex> indexes;
+    for (int row = 0; row < selection.browser->length(); ++row) {
+        const auto index = selection.browser->index(row);
+        if ( !selection.indexes.contains(index) )
+            indexes.append(index);
+    }
+    selection.indexes = indexes;
+    m_selections[id] = selection;
+}
+
+void ScriptableProxy::selectionSelectAll(int id)
+{
+    INVOKE2(selectionSelectAll, (id));
+    auto selection = m_selections.take(id);
+    if (!selection.browser)
+        return;
+
+    selection.indexes.clear();
+    for (int row = 0; row < selection.browser->length(); ++row)
+        selection.indexes.append(selection.browser->index(row));
+    m_selections[id] = selection;
+}
+
+void ScriptableProxy::selectionSelect(int id, const QVariant &maybeRe, const QString &mimeFormat)
+{
+    INVOKE2(selectionSelect, (id, maybeRe, mimeFormat));
+    auto selection = m_selections.take(id);
+    if (!selection.browser)
+        return;
+
+    const QRegularExpression re = maybeRe.toRegularExpression();
+    QList<QPersistentModelIndex> indexes;
+    for (int row = 0; row < selection.browser->length(); ++row) {
+        const auto index = selection.browser->index(row);
+        if ( selection.indexes.contains(index) )
+            continue;
+
+        const QVariantMap dataMap = index.data(contentType::data).toMap();
+        if ( mimeFormat.isEmpty() ) {
+            if ( !maybeRe.isValid() )
+                continue;
+            const QString text = getTextData(dataMap);
+            if ( text.contains(re) )
+                indexes.append(index);
+        } else if ( dataMap.contains(mimeFormat) == maybeRe.isValid() ) {
+            const QString text = getTextData(dataMap, mimeFormat);
+            if ( text.contains(re) )
+                indexes.append(index);
         }
     }
+    selection.indexes.append(indexes);
+    m_selections[id] = selection;
+}
+
+void ScriptableProxy::selectionDeselectIndexes(int id, const QVector<int> &indexes)
+{
+    INVOKE2(selectionDeselectIndexes, (id, indexes));
+
+    auto selection = m_selections.take(id);
+    auto indexesSorted = indexes;
+    std::sort(indexesSorted.begin(), indexesSorted.end(), std::greater<int>());
+    for (int index : indexesSorted)
+        selection.indexes.removeAt(index);
+    m_selections[id] = selection;
+}
+
+void ScriptableProxy::selectionDeselectSelection(int id, int toDeselectId)
+{
+    INVOKE2(selectionDeselectSelection, (id, toDeselectId));
+    auto selection = m_selections.take(id);
+    const auto deselection = m_selections.value(toDeselectId);
+
+    selectionRemoveIf(
+        &selection.indexes,
+        [&](const QPersistentModelIndex &index){
+            return !index.isValid() || deselection.indexes.contains(index);
+        });
+    m_selections[id] = selection;
+}
+
+void ScriptableProxy::selectionGetCurrent(int id)
+{
+    INVOKE2(selectionGetCurrent, (id));
+
+    QList<QPersistentModelIndex> selected = selectedIndexes();
+    ClipboardBrowser *c = browserForIndexes(selected);
+    if (c == nullptr) {
+        const QString currentTab = m_actionData.value(mimeCurrentTab).toString();
+        c = fetchBrowser(currentTab);
+    }
+    m_selections[id] = {c, selected};
+}
+
+int ScriptableProxy::selectionGetSize(int id)
+{
+    INVOKE(selectionGetSize, (id));
+    return m_selections.value(id).indexes.size();
+}
+
+QString ScriptableProxy::selectionGetTabName(int id)
+{
+    INVOKE(selectionGetTabName, (id));
+    const auto selection = m_selections.value(id);
+    return selection.browser ? selection.browser->tabName() : QString();
+}
+
+QVector<int> ScriptableProxy::selectionGetRows(int id)
+{
+    INVOKE(selectionGetRows, (id));
+
+    auto selection = m_selections.value(id);
+    QVector<int> rows;
+    rows.reserve(selection.indexes.size());
+    for (const auto &index : selection.indexes)
+        rows.append(index.row());
+    return rows;
+}
+
+QVariantMap ScriptableProxy::selectionGetItemIndex(int id, int index)
+{
+    INVOKE(selectionGetItemIndex, (id, index));
+
+    auto selection = m_selections.value(id);
+    if ( selection.indexes.isEmpty() || index < 0 || index >= selection.indexes.size() )
+        return {};
+
+    return selection.indexes[index].data(contentType::data).toMap();
+}
+
+void ScriptableProxy::selectionSetItemIndex(int id, int index, const QVariantMap &item)
+{
+    INVOKE2(selectionSetItemIndex, (id, index, item));
+
+    const auto selection = m_selections.value(id);
+    if ( !selection.browser || index < 0 || index >= selection.indexes.size() )
+        return;
+
+    const QModelIndex ind = selection.indexes[index];
+    selection.browser->model()->setData(ind, item, contentType::data);
+}
+
+QVariantList ScriptableProxy::selectionGetItemsData(int id)
+{
+    INVOKE(selectionGetItemsData, (id));
+
+    QVariantList dataList;
+    const auto selection = m_selections.value(id);
+    for (const auto &index : selection.indexes) {
+        const auto data = index.data(contentType::data).toMap();
+        dataList.append(data);
+    }
+    return dataList;
+}
+
+void ScriptableProxy::selectionSetItemsData(int id, const QVariantList &dataList)
+{
+    INVOKE2(selectionSetItemsData, (id, dataList));
+
+    QMap<QPersistentModelIndex, QVariantMap> itemsData;
+    const auto selection = m_selections.value(id);
+    const auto count = std::min( selection.indexes.size(), dataList.size() );
+    for ( int i = 0; i < count; ++i ) {
+        const auto &index = selection.indexes[i];
+        if ( index.isValid() )
+            itemsData[index] = dataList[i].toMap();
+    }
+
+    selection.browser->setItemsData(itemsData);
+}
+
+QVariantList ScriptableProxy::selectionGetItemsFormat(int id, const QString &format)
+{
+    INVOKE(selectionGetItemsFormat, (id, format));
+
+    QVariantList dataList;
+    const auto selection = m_selections.value(id);
+    for (const auto &index : selection.indexes) {
+        const auto data = index.data(contentType::data).toMap();
+        dataList.append( data.value(format) );
+    }
+    return dataList;
+}
+
+void ScriptableProxy::selectionSetItemsFormat(int id, const QString &mime, const QVariant &value)
+{
+    INVOKE2(selectionSetItemsFormat, (id, mime, value));
+
+    const auto selection = m_selections.value(id);
+    setItemsData(selection.browser, selection.indexes, mime, value);
+}
+
+void ScriptableProxy::selectionMove(int id, int row)
+{
+    INVOKE2(selectionMove, (id, row));
+    auto selection = m_selections.value(id);
+    if (!selection.browser)
+        return;
+
+    QModelIndexList indexes;
+    indexes.reserve(selection.indexes.size());
+    for (const auto &index : selection.indexes) {
+        if (index.isValid())
+            indexes.append(index);
+    }
+
+    if ( !indexes.isEmpty() )
+        selection.browser->move(indexes, row);
+}
+
+void ScriptableProxy::selectionSort(int id, const QVector<int> &indexes)
+{
+    INVOKE2(selectionSort, (id, indexes));
+
+    auto selection = m_selections.value(id);
+
+    QList<QPersistentModelIndex> sorted;
+    sorted.reserve( indexes.size() );
+    for (const int i : indexes) {
+        if (i < 0 || i >= selection.indexes.size())
+            continue;
+
+        const auto index = selection.indexes[i];
+        if ( index.isValid() )
+            sorted.append(index);
+    }
+    selection.indexes = sorted;
+
+    if ( !sorted.isEmpty() )
+        selection.browser->sortItems(sorted);
 }
 
 #ifdef HAS_TESTS
@@ -1755,17 +2086,18 @@ int ScriptableProxy::inputDialog(const NamedValueList &values)
     inputDialog.dialog = new QDialog(m_wnd);
     QDialog &dialog = *inputDialog.dialog;
 
+    QString dialogTitle;
     QIcon icon;
     QVBoxLayout layout(&dialog);
     QWidgetList widgets;
-    widgets.reserve(values.size());
+    widgets.reserve(values.items.size());
 
     QString styleSheet;
     QRect geometry(-1, -1, 0, 0);
 
-    for (const auto &value : values) {
+    for (const auto &value : values.items) {
         if (value.name == ".title")
-            dialog.setWindowTitle( value.value.toString() );
+            dialogTitle = value.value.toString();
         else if (value.name == ".icon")
             icon = loadIcon(value.value.toString());
         else if (value.name == ".style")
@@ -1785,6 +2117,10 @@ int ScriptableProxy::inputDialog(const NamedValueList &values)
         else
             widgets.append( createWidget(value.name, value.value, &inputDialog) );
     }
+
+    // WORKAROUND for broken initial focus in Qt 6.6 (QTBUG-121514)
+    if (!widgets.isEmpty())
+        widgets.first()->setFocus();
 
     dialog.adjustSize();
 
@@ -1819,15 +2155,17 @@ int ScriptableProxy::inputDialog(const NamedValueList &values)
             return;
 
         NamedValueList result;
-        result.reserve( widgets.size() );
+        result.items.reserve( widgets.size() );
 
         if ( inputDialog.dialog->result() ) {
             for ( auto w : widgets ) {
                 const QString propertyName = w->property(propertyWidgetProperty).toString();
                 const QString name = w->property(propertyWidgetName).toString();
                 const QVariant value = w->property(propertyName.toUtf8().constData());
-                result.append( NamedValue(name, value) );
+                result.items.append( NamedValue(name, value) );
             }
+            if ( widgets.isEmpty() )
+                result.items.append( NamedValue(QString(), true) );
         }
 
         QByteArray bytes;
@@ -1841,13 +2179,17 @@ int ScriptableProxy::inputDialog(const NamedValueList &values)
     });
 
     // Connecting this directly to QEventLoop::quit() doesn't seem to work always.
-    connect(this, &ScriptableProxy::clientDisconnected, &dialog, &QDialog::reject);
+    connect(this, &ScriptableProxy::abortEvaluation, &dialog, &QDialog::reject);
+
+    if ( !dialogTitle.isNull() ) {
+        dialog.setWindowTitle(dialogTitle);
+        dialog.setObjectName(QStringLiteral("dialog_") + dialogTitle);
+        WindowGeometryGuard::create(&dialog);
+    }
 
     dialog.show();
 
-    // Skip raising dialog in tests.
-    if ( !qApp->property("CopyQ_test_id").isValid() )
-        raiseWindow(&dialog);
+    raiseWindow(&dialog);
 
     return dialogId;
 }
@@ -1855,18 +2197,14 @@ int ScriptableProxy::inputDialog(const NamedValueList &values)
 void ScriptableProxy::setSelectedItemsData(const QString &mime, const QVariant &value)
 {
     INVOKE2(setSelectedItemsData, (mime, value));
-    const QList<QPersistentModelIndex> selected = selectedIndexes();
-    for (const auto &index : selected) {
-        ClipboardBrowser *c = m_wnd->browserForItem(index);
-        if (c) {
-            QVariantMap data = c->model()->data(index, contentType::data).toMap();
-            if (value.isValid())
-                data[mime] = value;
-            else
-                data.remove(mime);
-            c->model()->setData(index, data, contentType::data);
-        }
-    }
+
+    QList<QPersistentModelIndex> selected = selectedIndexes();
+    selectionRemoveInvalid(&selected);
+    ClipboardBrowser *c = browserForIndexes(selected);
+    if (c == nullptr)
+        return;
+
+    setItemsData(c, selected, mime, value);
 }
 
 void ScriptableProxy::filter(const QString &text)
@@ -1968,10 +2306,10 @@ QStringList ScriptableProxy::screenNames()
     return result;
 }
 
-Qt::KeyboardModifiers ScriptableProxy::queryKeyboardModifiers()
+KeyboardModifierList ScriptableProxy::queryKeyboardModifiers()
 {
     INVOKE(queryKeyboardModifiers, ());
-    return QApplication::queryKeyboardModifiers();
+    return {QApplication::queryKeyboardModifiers()};
 }
 
 QPoint ScriptableProxy::pointerPosition()
@@ -2077,8 +2415,11 @@ void ScriptableProxy::setTitle(const QString &title)
     INVOKE2(setTitle, (title));
 
     if (title.isEmpty()) {
-        m_wnd->setWindowTitle(QString());
-        m_wnd->setTrayTooltip(QGuiApplication::applicationDisplayName());
+        const QString defaultTitle = isMonitoringEnabled()
+            ? QString()
+            : tr("*Clipboard Storing Disabled*", "Main window title if clipboard storing is disabled");
+        m_wnd->setWindowTitle(defaultTitle);
+        m_wnd->setTrayTooltip(defaultTitle);
     } else {
         m_wnd->setWindowTitle(title);
         m_wnd->setTrayTooltip(title);
@@ -2124,7 +2465,9 @@ void ScriptableProxy::showDataNotification(const QVariantMap &data)
 
     const QStringList formats = data.keys();
     const int imageIndex = formats.indexOf(QRegularExpression("^image/.*"));
-    const QFont &font = qApp->font();
+    const QFont &font = notification->widget()
+        ? notification->widget()->font()
+        : qApp->font();
     const bool isHidden = data.contains(mimeHidden);
 
     QString title;
@@ -2161,7 +2504,6 @@ void ScriptableProxy::showDataNotification(const QVariantMap &data)
     }
 
     notification->setTitle(title);
-    notification->show();
 }
 
 bool ScriptableProxy::enableMenuItem(int actionId, int currentRun, int menuItemMatchCommandIndex, const QVariantMap &menuItem)
@@ -2256,6 +2598,12 @@ QStringList ScriptableProxy::styles()
     return QStyleFactory::keys();
 }
 
+void ScriptableProxy::setScriptOverrides(const QVector<int> &overrides)
+{
+    INVOKE2(setScriptOverrides, (overrides));
+    m_wnd->setScriptOverrides(overrides, m_actionId);
+}
+
 ClipboardBrowser *ScriptableProxy::fetchBrowser(const QString &tabName)
 {
     if (tabName.isEmpty()) {
@@ -2288,29 +2636,59 @@ QByteArray ScriptableProxy::itemData(const QString &tabName, int i, const QStrin
     return data.value(mime).toByteArray();
 }
 
-ClipboardBrowser *ScriptableProxy::currentBrowser() const
+void ScriptableProxy::setItemsData(
+    ClipboardBrowser *c, const QList<QPersistentModelIndex> &indexes, const QString &mime, const QVariant &value)
 {
-    const QString currentTabName = m_actionData.value(mimeCurrentTab).toString();
-    if (currentTabName.isEmpty())
-        return nullptr;
+    QMap<QPersistentModelIndex, QVariantMap> itemsData;
 
-    const int i = m_wnd->findTabIndex(currentTabName);
-    if (i == -1)
-        return nullptr;
+    for (const auto &index : indexes) {
+        if ( !index.isValid() )
+            continue;
 
-    auto c = m_wnd->browser(i);
-    Q_ASSERT(c->tabName() == currentTabName);
-    return c;
+        QVariantMap data = index.data(contentType::data).toMap();
+        if (value.isValid())
+            data[mime] = value;
+        else
+            data.remove(mime);
+        itemsData[index] = data;
+    }
+
+    c->setItemsData(itemsData);
 }
 
-QList<QPersistentModelIndex> ScriptableProxy::selectedIndexes() const
+template<typename T>
+T ScriptableProxy::getSelectionData(const QString &mime)
 {
-    return m_actionData.value(mimeSelectedItems)
-            .value< QList<QPersistentModelIndex> >();
+    QVariant value = m_actionData.value(mime);
+    if ( !value.isValid() && !m_actionData.contains(mimeCurrentTab) && getSelectionData() )
+        value = m_actionData.value(mime);
+    return value.value<T>();
+}
+
+QPersistentModelIndex ScriptableProxy::currentIndex()
+{
+    return getSelectionData<QPersistentModelIndex>(mimeCurrentItem);
+}
+
+QList<QPersistentModelIndex> ScriptableProxy::selectedIndexes()
+{
+    return getSelectionData<QList<QPersistentModelIndex>>(mimeSelectedItems);
+}
+
+ClipboardBrowser *ScriptableProxy::browserForIndexes(const QList<QPersistentModelIndex> &indexes) const
+{
+    for (const auto &index : indexes) {
+        if ( index.isValid() )
+            return m_wnd->browserForItem(index);
+    }
+    return nullptr;
 }
 
 QVariant ScriptableProxy::waitForFunctionCallFinished(int functionCallId)
 {
+    if (m_disconnected)
+        return QVariant();
+
     QVariant result;
 
     QEventLoop loop;
@@ -2321,11 +2699,24 @@ QVariant ScriptableProxy::waitForFunctionCallFinished(int functionCallId)
                 result = returnValue;
                 loop.quit();
             });
-    connect(this, &ScriptableProxy::clientDisconnected, &loop, &QEventLoop::quit);
-    connect(qApp, &QCoreApplication::aboutToQuit, &loop, &QEventLoop::quit);
+    connect(this, &ScriptableProxy::abortEvaluation, &loop, &QEventLoop::quit);
+
+    connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, &loop, &QEventLoop::quit);
     loop.exec();
 
     return result;
+}
+
+bool ScriptableProxy::getSelectionData()
+{
+    auto c = m_wnd->browser();
+    if (c == nullptr)
+        return false;
+
+    const QVariantMap data = selectionData(*c);
+    for (auto it = data.constBegin(); it != data.constEnd(); ++it)
+        m_actionData[it.key()] = it.value();
+    return true;
 }
 
 #ifdef HAS_TESTS
@@ -2354,4 +2745,23 @@ QString themesPath()
 QString translationsPath()
 {
     return platformNativeInterface()->translationPrefix();
+}
+
+void setClipboardMonitorRunning(bool running)
+{
+    QSettings settings(
+          QSettings::IniFormat,
+          QSettings::UserScope,
+          QCoreApplication::organizationName(),
+          QCoreApplication::applicationName() + "-monitor");
+    settings.setValue(QStringLiteral("running"), running);
+}
+bool isClipboardMonitorRunning()
+{
+    const QSettings settings(
+          QSettings::IniFormat,
+          QSettings::UserScope,
+          QCoreApplication::organizationName(),
+          QCoreApplication::applicationName() + "-monitor");
+    return settings.value(QStringLiteral("running")).toBool();
 }

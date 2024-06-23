@@ -1,27 +1,11 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #ifndef CLIPBOARDSERVER_H
 #define CLIPBOARDSERVER_H
 
 #include "app.h"
 #include "common/clipboardmode.h"
+#include "common/command.h"
 #include "common/server.h"
 #include "common/clientsocket.h"
 #include "gui/clipboardbrowsershared.h"
@@ -32,6 +16,7 @@
 
 class Action;
 class ActionHandler;
+class AppConfig;
 class ItemFactory;
 class MainWindow;
 class NotificationDaemon;
@@ -40,7 +25,6 @@ class Server;
 class QxtGlobalShortcut;
 class QApplication;
 class QSessionManager;
-struct Command;
 struct NotificationButton;
 
 /**
@@ -72,7 +56,7 @@ public:
     void createGlobalShortcut(const QKeySequence &shortcut, const Command &command);
 
     /** Load settings. */
-    void loadSettings();
+    void loadSettings(AppConfig *appConfig);
 
 signals:
     void closeClients();
@@ -134,6 +118,8 @@ private:
 
     void sendActionData(int actionId, const QByteArray &bytes);
 
+    void cleanDataFiles();
+
     Server *m_server = nullptr;
     MainWindow* m_wnd = nullptr;
     QPointer<Action> m_monitor;
@@ -151,6 +137,7 @@ private:
 
     QMap<int, QByteArray> m_actionDataToSend;
     QTimer m_timerClearUnsentActionData;
+    QTimer m_timerCleanItemFiles;
 
     struct ClientData {
         ClientData() = default;

@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "action.h"
 
@@ -29,9 +12,8 @@
 #include <QEventLoop>
 #include <QPointer>
 #include <QProcessEnvironment>
+#include <QRegularExpression>
 #include <QTimer>
-
-#include <cstring>
 
 namespace {
 
@@ -47,18 +29,24 @@ void startProcess(QProcess *process, const QStringList &args, QIODevice::OpenMod
 }
 
 template <typename Entry, typename Container>
-void appendAndClearNonEmpty(Entry &entry, Container &containter)
+void appendAndClearNonEmpty(Entry &entry, Container &container)
 {
     if ( !entry.isEmpty() ) {
-        containter.append(entry);
+        container.append(entry);
         entry.clear();
     }
 }
 
-bool getScriptFromLabel(const char *label, const QStringRef &cmd, QString *script)
+bool getScriptFromLabel(const char *labelStr, const QString &cmd, int i, QString *script)
 {
-    if ( cmd.startsWith(label) ) {
-        *script = cmd.string()->mid( cmd.position() + static_cast<int>(strlen(label)) );
+    const QLatin1String label(labelStr);
+#if QT_VERSION < QT_VERSION_CHECK(5,10,0)
+    const auto mid = cmd.midRef(i, label.size());
+#else
+    const auto mid = QStringView(cmd).mid(i, label.size());
+#endif
+    if (mid == label) {
+        *script = cmd.mid(i + label.size());
         return true;
     }
 
@@ -77,11 +65,15 @@ QList< QList<QStringList> > parseCommands(const QString &cmd, const QStringList 
     bool escape = false;
     bool percent = false;
 
+    // Ignore escape sequences if command starts with an unescaped Windows path.
+    const QRegularExpression reUnescapedWindowsPath(R"(^\s*['"]?[a-zA-Z]:\\[^\\])");
+    const bool allowEscape = !cmd.contains(reUnescapedWindowsPath);
+
     for (int i = 0; i < cmd.size(); ++i) {
         const QChar &c = cmd[i];
 
         if (percent) {
-            if (c >= '1' && c <= '9') {
+            if (c == '1' || (c >= '2' && c <= '9' && capturedTexts.size() > 1)) {
                 arg.resize( arg.size() - 1 );
                 arg.append( capturedTexts.value(c.digitValue() - 1) );
                 continue;
@@ -100,7 +92,7 @@ QList< QList<QStringList> > parseCommands(const QString &cmd, const QStringList 
             } else {
                 arg.append(c);
             }
-        } else if (c == '\\') {
+        } else if (allowEscape && c == '\\') {
             escape = true;
         } else if (!quote.isNull()) {
             if (quote == c) {
@@ -133,18 +125,17 @@ QList< QList<QStringList> > parseCommands(const QString &cmd, const QStringList 
         } else {
             if ( arg.isEmpty() && command.isEmpty() ) {
                 // Treat command as script if known label is present.
-                const QStringRef cmd1 = cmd.midRef(i);
-                if ( getScriptFromLabel("copyq:", cmd1, &script) )
+                if ( getScriptFromLabel("copyq:", cmd, i, &script) )
                     command << "copyq" << "eval" << "--" << script;
-                else if ( getScriptFromLabel("sh:", cmd1, &script) )
+                else if ( getScriptFromLabel("sh:", cmd, i, &script) )
                     command << "sh" << "-c" << "--" << script << "--";
-                else if ( getScriptFromLabel("bash:", cmd1, &script) )
+                else if ( getScriptFromLabel("bash:", cmd, i, &script) )
                     command << "bash" << "-c" << "--" << script << "--";
-                else if ( getScriptFromLabel("perl:", cmd1, &script) )
+                else if ( getScriptFromLabel("perl:", cmd, i, &script) )
                     command << "perl" << "-e" << script << "--";
-                else if ( getScriptFromLabel("python:", cmd1, &script) )
+                else if ( getScriptFromLabel("python:", cmd, i, &script) )
                     command << "python" << "-c" << script;
-                else if ( getScriptFromLabel("ruby:", cmd1, &script) )
+                else if ( getScriptFromLabel("ruby:", cmd, i, &script) )
                     command << "ruby" << "-e" << script << "--";
 
                 if ( !script.isEmpty() ) {
@@ -271,7 +262,7 @@ void Action::start()
                  this, &Action::onSubProcessErrorOutput );
     }
 
-    pipeThroughProcesses(m_processes.begin(), m_processes.end());
+    pipeThroughProcesses(m_processes.constBegin(), m_processes.constEnd());
 
     QProcess *lastProcess = m_processes.back();
     connect( lastProcess, &QProcess::started,
@@ -319,7 +310,7 @@ bool Action::waitForFinished(int msecs)
         t.setSingleShot(true);
         t.start(msecs);
     }
-    loop.exec(QEventLoop::ExcludeUserInputEvents);
+    loop.exec(QEventLoop::AllEvents);
 
     // Loop stopped because application is exiting?
     while ( self && isRunning() && (msecs < 0 || t.isActive()) )
@@ -354,7 +345,7 @@ void Action::appendErrorOutput(const QByteArray &errorOutput)
     m_errorOutput.append(errorOutput);
 }
 
-void Action::onSubProcessError(QProcess::ProcessError error)
+void Action::onSubProcessError(int error)
 {
     QProcess *p = qobject_cast<QProcess*>(sender());
     Q_ASSERT(p);
@@ -388,7 +379,7 @@ void Action::onSubProcessOutput()
     if ( m_processes.empty() )
         return;
 
-    auto p = m_processes.back();
+    QProcess *p = m_processes.back();
     if ( p->isReadable() )
         appendOutput( p->readAll() );
 }
@@ -441,8 +432,9 @@ void Action::closeSubCommands()
     if (m_processes.empty())
         return;
 
-    m_exitCode = m_processes.back()->exitCode();
-    m_failed = m_failed || m_processes.back()->exitStatus() != QProcess::NormalExit;
+    QProcess *last = m_processes.back();
+    m_exitCode = last->exitCode();
+    m_failed = m_failed || last->exitStatus() != QProcess::NormalExit;
 
     for (auto p : m_processes)
         p->deleteLater();

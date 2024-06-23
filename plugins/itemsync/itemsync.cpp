@@ -1,27 +1,11 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "itemsync.h"
 #include "ui_itemsyncsettings.h"
 
 #include "filewatcher.h"
 
+#include "common/appconfig.h"
 #include "common/compatibility.h"
 #include "common/contenttype.h"
 #include "common/log.h"
@@ -45,6 +29,7 @@
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPushButton>
+#include <QSettings>
 #include <QTextEdit>
 #include <QTimer>
 #include <QtPlugin>
@@ -207,9 +192,9 @@ int iconFromBaseNameExtensionHelper(const QString &baseName)
         if ( hasImageExtension(ext) )
             return IconFileImage;
         if ( hasArchiveExtension(ext) )
-            return IconFileArchive;
+            return IconFileZipper;
         if ( hasTextExtension(ext) )
-            return IconFileAlt;
+            return IconFileLines;
     }
 
     return -1;
@@ -218,13 +203,13 @@ int iconFromBaseNameExtensionHelper(const QString &baseName)
 int iconFromMimeHelper(const QString &format)
 {
     if ( format.startsWith("video/") )
-        return IconPlayCircle;
+        return IconCirclePlay;
     if ( format.startsWith("audio/") )
-        return IconVolumeUp;
+        return IconVolumeHigh;
     if ( format.startsWith("image/") )
         return IconCamera;
     if ( format.startsWith("text/") )
-        return IconFileAlt;
+        return IconFileLines;
     return -1;
 }
 
@@ -419,15 +404,12 @@ bool ItemSync::eventFilter(QObject *, QEvent *event)
     return ItemWidget::filterMouseEvents(m_label, event);
 }
 
-ItemSyncSaver::ItemSyncSaver(QAbstractItemModel *model, const QString &tabPath, FileWatcher *watcher)
-    : m_model(model)
-    , m_tabPath(tabPath)
+ItemSyncSaver::ItemSyncSaver(const QString &tabPath, FileWatcher *watcher)
+    : m_tabPath(tabPath)
     , m_watcher(watcher)
 {
     if (m_watcher)
         m_watcher->setParent(this);
-    connect( model, &QAbstractItemModel::rowsMoved,
-             this, &ItemSyncSaver::onRowsMoved );
 }
 
 bool ItemSyncSaver::saveItems(const QString &tabName, const QAbstractItemModel &model, QIODevice *file)
@@ -483,7 +465,7 @@ bool ItemSyncSaver::canRemoveItems(const QList<QModelIndex> &indexList, QString 
                 QMessageBox::Yes ) == QMessageBox::Yes;
 }
 
-void ItemSyncSaver::itemsRemovedByUser(const QList<QModelIndex> &indexList)
+void ItemSyncSaver::itemsRemovedByUser(const QList<QPersistentModelIndex> &indexList)
 {
     if ( m_tabPath.isEmpty() )
         return;
@@ -498,7 +480,13 @@ QVariantMap ItemSyncSaver::copyItem(const QAbstractItemModel &, const QVariantMa
     if (m_watcher)
         m_watcher->updateItemsIfNeeded();
 
-    QVariantMap copiedItemData = itemData;
+    QVariantMap copiedItemData;
+    for (auto it = itemData.begin(); it != itemData.constEnd(); ++it) {
+        const auto &format = it.key();
+        if ( !format.startsWith(mimePrivateSyncPrefix) )
+            copiedItemData[format] = it.value();
+    }
+
     copiedItemData.insert(mimeSyncPath, m_tabPath);
 
     // Add text/uri-list if no data are present.
@@ -531,44 +519,6 @@ void ItemSyncSaver::setFocus(bool focus)
         m_watcher->setUpdatesEnabled(focus);
 }
 
-void ItemSyncSaver::onRowsMoved(const QModelIndex &, int start, int end, const QModelIndex &, int destinationRow)
-{
-    if (!m_model)
-        return;
-
-    /* If own items were moved, change their base names in data to trigger
-     * updating/renaming file names so they are also moved in other app instances.
-     *
-     * The implementation works in common cases but will fail if:
-     * - Items are moved after the last own item.
-     * - Items move repeatedly to some not-top position.
-     */
-    const int count = end - start + 1;
-
-    const int baseRow = destinationRow < start
-        ? destinationRow + count
-        : destinationRow;
-    QString baseName;
-    if (destinationRow > 0) {
-        const QModelIndex baseIndex = m_model->index(baseRow, 0);
-        baseName = FileWatcher::getBaseName(baseIndex);
-
-        if ( !isOwnFile(baseName) )
-            return;
-
-        if ( !baseName.isEmpty() && !baseName.contains(QLatin1Char('-')) )
-            baseName.append(QLatin1String("-0000"));
-    }
-
-    for (int row = baseRow - 1; row >= baseRow - count; --row) {
-        const auto index = m_model->index(row, 0);
-        if ( isOwnItem(index) ) {
-            const QVariantMap data = {{mimeBaseName, baseName}};
-            m_model->setData(index, data, contentType::updateData);
-        }
-    }
-}
-
 QString ItemSyncScriptable::getMimeBaseName() const
 {
     return mimeBaseName;
@@ -582,11 +532,12 @@ QString ItemSyncScriptable::selectedTabPath()
 
 ItemSyncLoader::ItemSyncLoader()
 {
+    registerSyncDataFileConverter();
 }
 
 ItemSyncLoader::~ItemSyncLoader() = default;
 
-QVariantMap ItemSyncLoader::applySettings()
+void ItemSyncLoader::applySettings(QSettings &settings)
 {
     // Apply settings from tab sync path table.
     QTableWidget *t = ui->tableWidgetSyncTabs;
@@ -600,7 +551,6 @@ QVariantMap ItemSyncLoader::applySettings()
             m_tabPaths.insert(tabName, tabPath);
         }
     }
-    m_settings.insert(configSyncTabs, tabPaths);
 
     // Apply settings from file format table.
     t = ui->tableWidgetFormatSettings;
@@ -626,22 +576,26 @@ QVariantMap ItemSyncLoader::applySettings()
         fixUserMimeType(&fileFormat.itemMime);
         m_formatSettings.append(fileFormat);
     }
-    m_settings.insert(configFormatSettings, formatSettings);
 
-    return m_settings;
+    settings.setValue(configSyncTabs, tabPaths);
+    settings.setValue(configFormatSettings, formatSettings);
 }
 
-void ItemSyncLoader::loadSettings(const QVariantMap &settings)
+void ItemSyncLoader::loadSettings(const QSettings &settings)
 {
-    m_settings = settings;
-
     m_tabPaths.clear();
-    const QStringList tabPaths = m_settings.value(configSyncTabs).toStringList();
-    for (int i = 0; i < tabPaths.size(); i += 2)
-        m_tabPaths.insert( tabPaths[i], tabPaths.value(i + 1) );
+    m_tabPathsSaved.clear();
+    const QStringList tabPaths = settings.value(configSyncTabs).toStringList();
+    for (int i = 0; i < tabPaths.size(); i += 2) {
+        const QString &name = tabPaths[i];
+        const QString &path = tabPaths.value(i + 1);
+        m_tabPaths.insert(name, path);
+        m_tabPathsSaved.append(name);
+        m_tabPathsSaved.append(path);
+    }
 
     m_formatSettings.clear();
-    const QVariantList formatSettings = m_settings.value(configFormatSettings).toList();
+    const QVariantList formatSettings = settings.value(configFormatSettings).toList();
     for (const auto &formatSetting : formatSettings) {
         QVariantMap format = formatSetting.toMap();
         FileFormat fileFormat;
@@ -652,6 +606,12 @@ void ItemSyncLoader::loadSettings(const QVariantMap &settings)
         fixUserMimeType(&fileFormat.itemMime);
         m_formatSettings.append(fileFormat);
     }
+
+    const QSettings settingsTopLevel(settings.fileName(), settings.format());
+    m_itemDataThreshold = settingsTopLevel.value(
+        QStringLiteral("Options/") + Config::item_data_threshold::name(),
+        Config::item_data_threshold::defaultValue()
+    ).toInt();
 }
 
 QWidget *ItemSyncLoader::createSettingsWidget(QWidget *parent)
@@ -661,12 +621,11 @@ QWidget *ItemSyncLoader::createSettingsWidget(QWidget *parent)
     ui->setupUi(w);
 
     // Init tab sync path table.
-    const QStringList tabPaths = m_settings.value(configSyncTabs).toStringList();
     QTableWidget *t = ui->tableWidgetSyncTabs;
-    for (int row = 0, i = 0; i < tabPaths.size() + 20; ++row, i += 2) {
+    for (int row = 0, i = 0; i < m_tabPathsSaved.size() + 20; ++row, i += 2) {
         t->insertRow(row);
-        t->setItem( row, syncTabsTableColumns::tabName, new QTableWidgetItem(tabPaths.value(i)) );
-        t->setItem( row, syncTabsTableColumns::path, new QTableWidgetItem(tabPaths.value(i + 1)) );
+        t->setItem( row, syncTabsTableColumns::tabName, new QTableWidgetItem(m_tabPathsSaved.value(i)) );
+        t->setItem( row, syncTabsTableColumns::path, new QTableWidgetItem(m_tabPathsSaved.value(i + 1)) );
 
         QPushButton *button = createBrowseButton();
         t->setCellWidget(row, syncTabsTableColumns::browse, button);
@@ -677,17 +636,16 @@ QWidget *ItemSyncLoader::createSettingsWidget(QWidget *parent)
                                  syncTabsTableColumns::browse);
 
     // Init file format table.
-    const QVariantList formatSettings = m_settings.value(configFormatSettings).toList();
     t = ui->tableWidgetFormatSettings;
-    for (int row = 0; row < formatSettings.size() + 10; ++row) {
-        const QVariantMap format = formatSettings.value(row).toMap();
-        const QString formats = format.value("formats").toStringList().join(", ");
+    for (int row = 0; row < m_formatSettings.size() + 10; ++row) {
+        const FileFormat format = m_formatSettings.value(row);
+        const QString formats = format.extensions.join(", ");
         t->insertRow(row);
         t->setItem( row, formatSettingsTableColumns::formats, new QTableWidgetItem(formats) );
-        t->setItem( row, formatSettingsTableColumns::itemMime, new QTableWidgetItem(format.value("itemMime").toString()) );
+        t->setItem( row, formatSettingsTableColumns::itemMime, new QTableWidgetItem(format.itemMime) );
 
         auto button = new IconSelectButton();
-        button->setCurrentIcon( format.value("icon").toString() );
+        button->setCurrentIcon(format.icon);
         t->setCellWidget(row, formatSettingsTableColumns::icon, button);
     }
     setNormalStretchFixedColumns(t, formatSettingsTableColumns::formats,
@@ -811,7 +769,7 @@ ItemSaverPtr ItemSyncLoader::loadItems(const QString &tabName, QAbstractItemMode
     const auto tabPath = m_tabPaths.value(tabName);
     const auto path = files.isEmpty() ? tabPath : QFileInfo(files.first()).absolutePath();
     if ( path.isEmpty() )
-        return std::make_shared<ItemSyncSaver>(model, tabPath, nullptr);
+        return std::make_shared<ItemSyncSaver>(tabPath, nullptr);
 
     QDir dir(path);
     if ( !dir.mkpath(".") ) {
@@ -819,6 +777,7 @@ ItemSaverPtr ItemSyncLoader::loadItems(const QString &tabName, QAbstractItemMode
         return nullptr;
     }
 
-    auto *watcher = new FileWatcher(path, files, model, maxItems, m_formatSettings);
-    return std::make_shared<ItemSyncSaver>(model, tabPath, watcher);
+    auto *watcher = new FileWatcher(
+        path, files, model, maxItems, m_formatSettings, m_itemDataThreshold);
+    return std::make_shared<ItemSyncSaver>(tabPath, watcher);
 }

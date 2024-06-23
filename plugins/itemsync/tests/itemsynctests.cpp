@@ -1,25 +1,9 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "itemsynctests.h"
 
 #include "common/mimetypes.h"
+#include "common/sleeptimer.h"
 #include "tests/test_utils.h"
 
 #include <QDir>
@@ -53,11 +37,8 @@ public:
 
     void clear()
     {
-        if (isValid()) {
-            for ( const auto &fileName : files() )
-                remove(fileName);
-            m_dir.rmpath(".");
-        }
+        if (isValid())
+            m_dir.removeRecursively();
     }
 
     void create()
@@ -145,13 +126,9 @@ void ItemSyncTests::init()
 {
     TEST(m_test->init());
 
-    // Remove temporary directory.
-    for (int i = 0; i < 10; ++i)
-        TestDir(i, false);
-
     QDir tmpDir(QDir::cleanPath(testDir(0) + "/.."));
     if ( tmpDir.exists() )
-        QVERIFY(tmpDir.rmdir("."));
+        QVERIFY(tmpDir.removeRecursively());
 }
 
 void ItemSyncTests::cleanup()
@@ -406,11 +383,35 @@ void ItemSyncTests::modifyItems()
 
     RUN(args << "keys" << "HOME" << "DOWN" << "F2" << ":XXX" << "F2", "");
     RUN(args << "size", "4\n");
-    RUN(args << "read" << "0" << "1" << "2" << "3", "D,XXX,B,A");
+    RUN(args << "read" << "0" << "1" << "2" << "3" << "4", "D,XXX,B,A,");
 
     file = dir1.file(files[2]);
     QVERIFY(file->open(QIODevice::ReadOnly));
     QCOMPARE(file->readAll().data(), QByteArray("XXX").data());
+    file->close();
+
+    const auto script = R"(
+        setCommands([{
+            name: 'Modify current item',
+            inMenu: true,
+            shortcuts: ['Ctrl+F1'],
+            cmd: `
+                copyq: item = selectedItemsData()[0]
+                item[mimeText] = "ZZZ"
+                setSelectedItemData(0, item)
+            `
+        }])
+        )";
+    RUN(script, "");
+    RUN(args << "keys" << "HOME" << "DOWN" << "CTRL+F1", "");
+    WAIT_ON_OUTPUT(args << "read" << "1", "ZZZ");
+    RUN(args << "read" << "0" << "1" << "2" << "3" << "4", "D,ZZZ,B,A,");
+    RUN(args << "unload" << tab1, "");
+    RUN(args << "read" << "0" << "1" << "2" << "3" << "4", "D,ZZZ,B,A,");
+
+    file = dir1.file(files[2]);
+    QVERIFY(file->open(QIODevice::ReadOnly));
+    QCOMPARE(file->readAll().data(), QByteArray("ZZZ").data());
     file->close();
 }
 
@@ -747,4 +748,70 @@ void ItemSyncTests::moveOwnItemsSortsBaseNames()
     RUN(args << "keys" << "END" << "UP" << "CTRL+HOME", "");
     RUN(args << "read(0,1,2,3)", "B,C,D,A");
     RUN(args << testScript, "");
+
+    RUN(args << "keys" << "HOME" << "CTRL+END", "");
+    RUN(args << "read(0,1,2,3)", "C,D,A,B");
+    RUN(args << testScript, "");
+}
+
+void ItemSyncTests::avoidDuplicateItemsAddedFromClipboard()
+{
+    TestDir dir1(1);
+    const QString tab1 = testTab(1);
+    RUN("show" << tab1, "");
+
+    const Args args = Args() << "separator" << "," << "tab" << tab1;
+
+    RUN("config" << "clipboard_tab" << tab1, tab1 + "\n");
+    WAIT_ON_OUTPUT("isClipboardMonitorRunning", "true\n");
+
+    TEST( m_test->setClipboard("one") );
+    WAIT_ON_OUTPUT(args << "read(0,1,2,3)", "one,,,");
+
+    TEST( m_test->setClipboard("two") );
+    WAIT_ON_OUTPUT(args << "read(0,1,2,3)", "two,one,,");
+
+    TEST( m_test->setClipboard("one") );
+    WAIT_ON_OUTPUT(args << "read(0,1,2,3)", "one,two,,");
+}
+
+void ItemSyncTests::saveLargeItem()
+{
+    const auto tab = testTab(1);
+    const auto args = Args("tab") << tab;
+
+    const auto script = R"(
+        write(0, [{
+            'text/plain': '1234567890'.repeat(10000),
+            'application/x-copyq-test-data': 'abcdefghijklmnopqrstuvwxyz'.repeat(10000),
+        }])
+        )";
+    RUN(args << script, "");
+
+    for (int i = 0; i < 2; ++i) {
+        RUN(args << "read(0).left(20)", "12345678901234567890");
+        RUN(args << "read(0).length", "100000\n");
+        RUN(args << "getItem(0)[mimeText].left(20)", "12345678901234567890");
+        RUN(args << "getItem(0)[mimeText].length", "100000\n");
+        RUN(args << "getItem(0)['application/x-copyq-test-data'].left(26)", "abcdefghijklmnopqrstuvwxyz");
+        RUN(args << "getItem(0)['application/x-copyq-test-data'].length", "260000\n");
+        RUN(args << "ItemSelection().selectAll().itemAtIndex(0)[mimeText].length", "100000\n");
+        RUN("unload" << tab, tab + "\n");
+    }
+
+    RUN("show" << tab, "");
+    RUN("keys" << clipboardBrowserId << keyNameFor(QKeySequence::Copy), "");
+    WAIT_ON_OUTPUT("clipboard().left(20)", "12345678901234567890");
+    RUN("clipboard('application/x-copyq-test-data').left(26)", "abcdefghijklmnopqrstuvwxyz");
+    RUN("clipboard('application/x-copyq-test-data').length", "260000\n");
+
+    const auto tab2 = testTab(2);
+    const auto args2 = Args("tab") << tab2;
+    RUN("show" << tab2, "");
+    waitFor(waitMsPasteClipboard);
+    RUN("keys" << clipboardBrowserId << keyNameFor(QKeySequence::Paste), "");
+    RUN(args2 << "read(0).left(20)", "12345678901234567890");
+    RUN(args2 << "read(0).length", "100000\n");
+    RUN(args << "getItem(0)['application/x-copyq-test-data'].left(26)", "abcdefghijklmnopqrstuvwxyz");
+    RUN(args << "getItem(0)['application/x-copyq-test-data'].length", "260000\n");
 }

@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "actiondialog.h"
 #include "ui_actiondialog.h"
@@ -71,7 +54,9 @@ ActionDialog::ActionDialog(QWidget *parent)
     , m_currentCommandIndex(-1)
 {
     ui->setupUi(this);
-    ui->comboBoxCommands->setFont( ui->commandEdit->commandFont() );
+
+    // WORKAROUND for broken initial focus in Qt 6.6 (QTBUG-121514)
+    ui->comboBoxCommands->setFocus();
 
     auto shortcut = new QShortcut(QKeySequence(Qt::ControlModifier | Qt::Key_P), this);
     connect(shortcut, &QShortcut::activated, this, &ActionDialog::previousCommand);
@@ -211,14 +196,6 @@ void ActionDialog::onButtonBoxClicked(QAbstractButton* button)
     case QDialogButtonBox::Apply:
         acceptCommand();
         saveCurrentCommandToHistory();
-        break;
-
-    case QDialogButtonBox::Save:
-        emit saveCommand(command());
-        QMessageBox::information(
-                    this, tr("Command saved"),
-                    tr("Command was saved and can be accessed from item menu.\n"
-                       "You can set up the command in preferences.") );
         break;
 
     case QDialogButtonBox::Cancel:

@@ -1,26 +1,8 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #ifndef DUMMYCLIPBOARD_H
 #define DUMMYCLIPBOARD_H
 
-#include "app/clipboardownermonitor.h"
 #include "common/clipboardmode.h"
 #include "platform/platformclipboard.h"
 
@@ -39,15 +21,18 @@ public:
 
     void setData(ClipboardMode mode, const QVariantMap &dataMap) override;
 
-    QByteArray clipboardOwner() override { return m_ownerMonitor.clipboardOwner(); }
-
     const QMimeData *mimeData(ClipboardMode mode) const override;
 
+    bool isSelectionSupported() const override { return false; }
+
+    bool isHidden(const QMimeData &data) const override;
+
+    void setClipboardOwner(const QString &) override {}
+
 protected:
+    virtual const QMimeData *rawMimeData(ClipboardMode mode) const;
     virtual void onChanged(int mode);
     void onClipboardChanged(QClipboard::Mode mode);
-
-    ClipboardOwnerMonitor m_ownerMonitor;
 };
 
 #endif // DUMMYCLIPBOARD_H

@@ -34,6 +34,7 @@
 #include "common/config.h"
 #include "common/contenttype.h"
 #include "common/regexp.h"
+#include "common/textdata.h"
 #include "gui/iconfactory.h"
 #include "gui/icons.h"
 #include "gui/filtercompleter.h"
@@ -65,6 +66,29 @@ public:
         return m_searchString;
     }
 
+    void highlight(QTextEdit *edit, const QTextCharFormat &format) const override
+    {
+        QList<QTextEdit::ExtraSelection> selections = this->selections(edit->document(), format);
+
+        // If there are no matches, try to match document without accents/diacritics.
+        if (selections.isEmpty()) {
+            QTextDocument doc;
+            const auto text = edit->document()->toPlainText();
+            doc.setPlainText(accentsRemoved(text));
+            selections = this->selections(&doc, format);
+            for (QTextEdit::ExtraSelection &selection : selections) {
+                const auto pos = selection.cursor.position();
+                const auto anchor = selection.cursor.anchor();
+                selection.cursor = QTextCursor(edit->document());
+                selection.cursor.setPosition(pos);
+                selection.cursor.setPosition(anchor, QTextCursor::KeepAnchor);
+            }
+        }
+
+        edit->setExtraSelections(selections);
+        edit->update();
+    }
+
     bool matchesAll() const override
     {
         return m_searchString.isEmpty();
@@ -84,6 +108,8 @@ public:
     }
 
 private:
+    virtual QList<QTextEdit::ExtraSelection> selections(QTextDocument *doc, const QTextCharFormat &format) const = 0;
+
     QString m_searchString;
 };
 
@@ -103,39 +129,6 @@ public:
     bool matches(const QString &text) const override
     {
         return text.contains(m_re);
-    }
-
-    void highlight(QTextEdit *edit, const QTextCharFormat &format) const override
-    {
-        QList<QTextEdit::ExtraSelection> selections;
-
-        if ( m_re.isValid() && !matchesAll() ) {
-            QTextEdit::ExtraSelection selection;
-            selection.format = format;
-
-            QTextCursor cur = edit->document()->find(m_re);
-            int a = cur.position();
-            while ( !cur.isNull() ) {
-                if ( cur.hasSelection() ) {
-                    selection.cursor = cur;
-                    selections.append(selection);
-                } else {
-                    cur.movePosition(QTextCursor::NextCharacter);
-                }
-                cur = edit->document()->find(m_re, cur);
-                int b = cur.position();
-                if (a == b) {
-                    cur.movePosition(QTextCursor::NextCharacter);
-                    cur = edit->document()->find(m_re, cur);
-                    b = cur.position();
-                    if (a == b) break;
-                }
-                a = b;
-            }
-        }
-
-        edit->setExtraSelections(selections);
-        edit->update();
     }
 
     void search(QTextEdit *edit, bool backwards) const override
@@ -166,6 +159,34 @@ public:
     }
 
 private:
+    QList<QTextEdit::ExtraSelection> selections(QTextDocument *doc, const QTextCharFormat &format) const override
+    {
+        QList<QTextEdit::ExtraSelection> selections;
+
+        if ( m_re.isValid() && !matchesAll() ) {
+            QTextCursor cur = doc->find(m_re);
+            int a = cur.position();
+            while ( !cur.isNull() ) {
+                if ( cur.hasSelection() ) {
+                    selections.append({cur, format});
+                } else {
+                    cur.movePosition(QTextCursor::NextCharacter);
+                }
+                cur = doc->find(m_re, cur);
+                int b = cur.position();
+                if (a == b) {
+                    cur.movePosition(QTextCursor::NextCharacter);
+                    cur = doc->find(m_re, cur);
+                    b = cur.position();
+                    if (a == b) break;
+                }
+                a = b;
+            }
+        }
+
+        return selections;
+    }
+
     QRegularExpression m_re;
 };
 
@@ -189,43 +210,6 @@ public:
             [&text, this](const QString &needle) {
                 return text.contains(needle, m_caseSensitivity);
             });
-    }
-
-    void highlight(QTextEdit *edit, const QTextCharFormat &format) const override
-    {
-        QList<QTextEdit::ExtraSelection> selections;
-
-        QTextEdit::ExtraSelection selection;
-        selection.format = format;
-
-        QTextDocument::FindFlags flags;
-        if (m_caseSensitivity == Qt::CaseSensitive)
-            flags = QTextDocument::FindCaseSensitively;
-
-        for ( const QString &needle : m_needles ) {
-            QTextCursor cur = edit->document()->find(needle, 0, flags);
-            int a = cur.position();
-            while ( !cur.isNull() ) {
-                if ( cur.hasSelection() ) {
-                    selection.cursor = cur;
-                    selections.append(selection);
-                } else {
-                    cur.movePosition(QTextCursor::NextCharacter);
-                }
-                cur = edit->document()->find(needle, cur, flags);
-                int b = cur.position();
-                if (a == b) {
-                    cur.movePosition(QTextCursor::NextCharacter);
-                    cur = edit->document()->find(needle, cur, flags);
-                    b = cur.position();
-                    if (a == b) break;
-                }
-                a = b;
-            }
-        }
-
-        edit->setExtraSelections(selections);
-        edit->update();
     }
 
     void search(QTextEdit *edit, bool backwards) const override
@@ -283,6 +267,38 @@ public:
     }
 
 private:
+    QList<QTextEdit::ExtraSelection> selections(QTextDocument *doc, const QTextCharFormat &format) const override
+    {
+        QList<QTextEdit::ExtraSelection> selections;
+
+        QTextDocument::FindFlags flags;
+        if (m_caseSensitivity == Qt::CaseSensitive)
+            flags = QTextDocument::FindCaseSensitively;
+
+        for ( const QString &needle : m_needles ) {
+            QTextCursor cur = doc->find(needle, 0, flags);
+            int a = cur.position();
+            while ( !cur.isNull() ) {
+                if ( cur.hasSelection() ) {
+                    selections.append({cur, format});
+                } else {
+                    cur.movePosition(QTextCursor::NextCharacter);
+                }
+                cur = doc->find(needle, cur, flags);
+                int b = cur.position();
+                if (a == b) {
+                    cur.movePosition(QTextCursor::NextCharacter);
+                    cur = doc->find(needle, cur, flags);
+                    b = cur.position();
+                    if (a == b) break;
+                }
+                a = b;
+            }
+        }
+
+        return selections;
+    }
+
     QStringList m_needles;
     Qt::CaseSensitivity m_caseSensitivity;
 };
@@ -389,15 +405,10 @@ void FilterLineEdit::loadSettings()
     const bool filterCaseSensitive = appConfig.option<Config::filter_case_insensitive>();
     m_actionCaseInsensitive->setChecked(filterCaseSensitive);
 
-    // KDE has custom icons for this. Notice that icon namings are counter intuitive.
-    // If these icons are not available we use the freedesktop standard name before
-    // falling back to a bundled resource.
-    QIcon icon1 = QIcon::fromTheme(layoutDirection() == Qt::LeftToRight ?
-                     "edit-clear-locationbar-rtl" : "edit-clear-locationbar-ltr",
-                     getIcon("edit-clear", IconTimes));
+    const QIcon icon1 = getIcon("edit-clear", IconXmark);
     setButtonIcon(Right, icon1);
 
-    QIcon icon2 = getIcon("edit-find", IconSearch);
+    const QIcon icon2 = getIcon("edit-find", IconMagnifyingGlass);
     setButtonIcon(Left, icon2);
 
     if ( appConfig.option<Config::save_filter_history>() ) {
@@ -414,9 +425,15 @@ void FilterLineEdit::loadSettings()
 
 void FilterLineEdit::keyPressEvent(QKeyEvent *ke)
 {
-    // Up/Down arrow keys should be passed to item list
+    // Up/Down arrow keys should be passed to the item list
     // (on OS X this moves text cursor to the beginning/end).
     if (ke->key() == Qt::Key_Down || ke->key() == Qt::Key_Up) {
+        ke->ignore();
+        return;
+    }
+
+    // If no text is selected, pass copy actions to the item list.
+    if ( selectionLength() == 0 && ke->matches(QKeySequence::Copy) ) {
         ke->ignore();
         return;
     }

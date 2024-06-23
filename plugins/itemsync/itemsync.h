@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #ifndef ITEMSYNC_H
 #define ITEMSYNC_H
@@ -23,6 +6,7 @@
 #include "gui/icons.h"
 #include "item/itemwidgetwrapper.h"
 
+#include <QVariantMap>
 #include <QWidget>
 
 #include <memory>
@@ -60,13 +44,13 @@ class ItemSyncSaver final : public QObject, public ItemSaverInterface
     Q_OBJECT
 
 public:
-    ItemSyncSaver(QAbstractItemModel *model, const QString &tabPath, FileWatcher *watcher);
+    ItemSyncSaver(const QString &tabPath, FileWatcher *watcher);
 
     bool saveItems(const QString &tabName, const QAbstractItemModel &model, QIODevice *file) override;
 
     bool canRemoveItems(const QList<QModelIndex> &indexList, QString *error) override;
 
-    void itemsRemovedByUser(const QList<QModelIndex> &indexList) override;
+    void itemsRemovedByUser(const QList<QPersistentModelIndex> &indexList) override;
 
     QVariantMap copyItem(const QAbstractItemModel &model, const QVariantMap &itemData) override;
 
@@ -75,9 +59,6 @@ public:
     void setFileWatcher(FileWatcher *watcher);
 
 private:
-    void onRowsMoved(const QModelIndex &, int start, int end, const QModelIndex &, int destinationRow);
-
-    QPointer<QAbstractItemModel> m_model;
     QString m_tabPath;
     FileWatcher *m_watcher;
 };
@@ -141,9 +122,9 @@ public:
     QString description() const override { return tr("Synchronize items and notes with a directory on disk."); }
     QVariant icon() const override { return QVariant(IconUpload); }
 
-    QVariantMap applySettings() override;
+    void applySettings(QSettings &settings) override;
 
-    void loadSettings(const QVariantMap &settings) override;
+    void loadSettings(const QSettings &settings) override;
 
     QWidget *createSettingsWidget(QWidget *parent) override;
 
@@ -175,9 +156,10 @@ private:
     ItemSaverPtr loadItems(const QString &tabName, QAbstractItemModel *model, const QStringList &files, int maxItems);
 
     std::unique_ptr<Ui::ItemSyncSettings> ui;
-    QVariantMap m_settings;
     ItemSyncTabPaths m_tabPaths;
+    QStringList m_tabPathsSaved;
     QList<FileFormat> m_formatSettings;
+    int m_itemDataThreshold = -1;
 };
 
 #endif // ITEMSYNC_H

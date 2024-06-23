@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "textdata.h"
 
@@ -23,16 +6,28 @@
 
 #include <QLocale>
 #include <QString>
-#include <Qt>
+
+#include <algorithm>
+#include <iterator>
 
 namespace {
 
+const QLatin1String mimePluginPrefix(COPYQ_MIME_PREFIX "item");
+
 QString escapeHtmlSpaces(const QString &str)
 {
-    QString str2 = str;
-    return str2
-            .replace(' ', "&nbsp;")
-            .replace('\n', "<br />");
+    return QString(str)
+            .replace(' ', QLatin1String("&nbsp;"))
+            .replace('\n', QLatin1String("<br />"));
+}
+
+bool isPluginFormat(const QString &mime)
+{
+    return mime.startsWith(mimePrivatePrefix) || (
+        mime.startsWith(mimePluginPrefix)
+        && mime.size() > mimePluginPrefix.size()
+        && mime[mimePluginPrefix.size()] != '-'
+    );
 }
 
 } // namespace
@@ -49,8 +44,16 @@ uint hash(const QVariantMap &data)
         if (mime == mimeWindowTitle || mime == mimeOwner || mime == mimeClipboardMode)
             continue;
 
+        if ( isPluginFormat(mime) )
+            continue;
+
         seed = hash(seed, mime);
-        seed = hash(seed, data[mime].toByteArray());
+
+        const auto &value = it.value();
+        if ( value.type() == QVariant::ByteArray )
+            seed = hash(seed, value.toByteArray());
+        else
+            seed = hash(seed, value.toString());
     }
 
     return seed;
@@ -118,4 +121,18 @@ QVariantMap createDataMap(const QString &format, const QByteArray &value)
 QVariantMap createDataMap(const QString &format, const QString &value)
 {
     return createDataMap( format, value.toUtf8() );
+}
+
+QString accentsRemoved(const QString &text)
+{
+    if (text.isEmpty())
+        return {};
+
+    QString result = text.normalized(QString::NormalizationForm_D);
+    const auto newEnd = std::remove_if(
+        std::begin(result), std::end(result),
+        [](QChar c){ return c.category() == QChar::Mark_NonSpacing; });
+    const auto newSize = std::distance(std::begin(result), newEnd);
+    result.resize(newSize);
+    return result;
 }

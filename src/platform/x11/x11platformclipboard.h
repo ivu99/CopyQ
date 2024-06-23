@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #ifndef X11PLATFORMCLIPBOARD_H
 #define X11PLATFORMCLIPBOARD_H
@@ -41,17 +24,20 @@ public:
 
     void setData(ClipboardMode mode, const QVariantMap &dataMap) override;
 
-    const QMimeData *mimeData(ClipboardMode mode) const override;
+    bool isSelectionSupported() const override { return m_selectionSupported; }
+
+    void setClipboardOwner(const QString &owner) override { m_clipboardOwner = owner; }
 
 protected:
+    const QMimeData *rawMimeData(ClipboardMode mode) const override;
     void onChanged(int mode) override;
 
 private:
     struct ClipboardData {
         QVariantMap newData;
         QVariantMap data;
-        QByteArray owner;
-        QByteArray newOwner;
+        QString owner;
+        QString newOwner;
         QTimer timerEmitChange;
         QStringList formats;
         quint32 newDataTimestamp;
@@ -59,6 +45,7 @@ private:
         bool enabled = true;
         bool cloningData = false;
         bool abortCloning = false;
+        bool ignoreNext = false;
         int retry = 0;
     };
 
@@ -73,6 +60,9 @@ private:
     ClipboardData m_selectionData;
 
     bool m_monitoring = false;
+    bool m_selectionSupported = true;
+
+    QString m_clipboardOwner;
 };
 
 #endif // X11PLATFORMCLIPBOARD_H

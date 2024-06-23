@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "configurationmanager.h"
 #include "ui_configurationmanager.h"
@@ -48,13 +31,11 @@
 #include "item/itemwidget.h"
 #include "platform/platformnativeinterface.h"
 
-#include <QDesktopWidget>
 #include <QDir>
 #include <QFile>
 #include <QMessageBox>
 #include <QMimeData>
 #include <QScrollArea>
-#include <QSettings>
 #include <QTranslator>
 
 namespace {
@@ -149,7 +130,8 @@ ConfigurationManager::ConfigurationManager(ItemFactory *itemFactory, QWidget *pa
     if (itemFactory)
         m_tabAppearance->createPreview(itemFactory);
 
-    loadSettings();
+    AppConfig appConfig;
+    loadSettings(&appConfig);
 
     if (itemFactory)
         m_tabShortcuts->addCommands( itemFactory->commands() );
@@ -175,12 +157,12 @@ void ConfigurationManager::initTabIcons()
     ItemOrderList *list = ui->itemOrderList;
     list->setItemsMovable(false);
     list->appendItem( tr("General"), getIcon("", IconWrench), makeTab(m_tabGeneral, this) );
-    list->appendItem( tr("Layout"), getIcon("", IconColumns), makeTab(m_tabLayout, this) );
-    list->appendItem( tr("History"), getIcon("", IconThList), makeTab(m_tabHistory, this) );
+    list->appendItem( tr("Layout"), getIcon("", IconTableColumns), makeTab(m_tabLayout, this) );
+    list->appendItem( tr("History"), getIcon("", IconList), makeTab(m_tabHistory, this) );
     list->appendItem( tr("Tray"), getIcon("", IconInbox), makeTab(m_tabTray, this) );
-    list->appendItem( tr("Notifications"), getIcon("", IconInfoCircle), makeTab(m_tabNotifications, this) );
+    list->appendItem( tr("Notifications"), getIcon("", IconCircleInfo), makeTab(m_tabNotifications, this) );
     list->appendItem( tr("Tabs"), getIconFromResources("tab_rename"), makeTab(&m_tabTabs, this) );
-    list->appendItem( tr("Items"), getIcon("", IconThList), makeTab(&m_tabItems, this) );
+    list->appendItem( tr("Items"), getIcon("", IconList), makeTab(&m_tabItems, this) );
     list->appendItem( tr("Shortcuts"), getIcon("", IconKeyboard), makeTab(&m_tabShortcuts, this) );
     list->appendItem( tr("Appearance"), getIcon("", IconImage), makeTab(&m_tabAppearance, this) );
 }
@@ -191,9 +173,12 @@ void ConfigurationManager::initPluginWidgets(ItemFactory *itemFactory)
     m_tabItems->setItemsMovable(true);
 
     for ( const auto &loader : itemFactory->loaders() ) {
+        if ( loader->name().isEmpty() )
+            continue;
+
         ItemOrderList::ItemPtr pluginItem(new PluginItem(loader));
         const QIcon icon = getIcon(loader->icon());
-        const auto state = itemFactory->isLoaderEnabled(loader)
+        const auto state = loader->isEnabled()
                 ? ItemOrderList::Checked
                 : ItemOrderList::Unchecked;
         m_tabItems->appendItem( loader->name(), icon, pluginItem, state );
@@ -244,10 +229,10 @@ void ConfigurationManager::updateAutostart()
     }
 }
 
-void ConfigurationManager::setAutostartEnable()
+void ConfigurationManager::setAutostartEnable(AppConfig *appConfig)
 {
     auto platform = platformNativeInterface();
-    platform->setAutostartEnabled( AppConfig().option<Config::autostart>() );
+    platform->setAutostartEnabled( appConfig->option<Config::autostart>() );
 }
 
 void ConfigurationManager::initOptions()
@@ -259,8 +244,13 @@ void ConfigurationManager::initOptions()
     bind<Config::expire_tab>(m_tabHistory->spinBoxExpireTab);
     bind<Config::editor>(m_tabHistory->lineEditEditor);
     bind<Config::item_popup_interval>(m_tabNotifications->spinBoxNotificationPopupInterval);
+    bind<Config::notification_position>(m_tabNotifications->comboBoxNotificationPosition);
     bind<Config::clipboard_notification_lines>(m_tabNotifications->spinBoxClipboardNotificationLines);
+    bind<Config::notification_horizontal_offset>(m_tabNotifications->spinBoxNotificationHorizontalOffset);
+    bind<Config::notification_vertical_offset>(m_tabNotifications->spinBoxNotificationVerticalOffset);
     bind<Config::notification_maximum_width>(m_tabNotifications->spinBoxNotificationMaximumWidth);
+    bind<Config::notification_maximum_height>(m_tabNotifications->spinBoxNotificationMaximumHeight);
+    bind<Config::native_notifications>(m_tabNotifications->checkBoxUseNativeNotifications);
     bind<Config::edit_ctrl_return>(m_tabHistory->checkBoxEditCtrlReturn);
     bind<Config::show_simple_items>(m_tabHistory->checkBoxShowSimpleItems);
     bind<Config::number_search>(m_tabHistory->checkBoxNumberSearch);
@@ -298,6 +288,7 @@ void ConfigurationManager::initOptions()
     bind<Config::tray_tab>(m_tabTray->comboBoxMenuTab->lineEdit());
 
     /* other options */
+    bind<Config::item_data_threshold>();
     bind<Config::command_history_size>();
 #ifdef HAS_MOUSE_SELECTIONS
     /* X11 clipboard selection monitoring and synchronization */
@@ -311,12 +302,6 @@ void ConfigurationManager::initOptions()
     m_tabGeneral->checkBoxCopyClip->hide();
     m_tabGeneral->checkBoxRunSel->hide();
 #endif
-
-    // values of last submitted action
-    bind<Config::action_has_input>();
-    bind<Config::action_has_output>();
-    bind<Config::action_separator>();
-    bind<Config::action_output_tab>();
 
     bind<Config::hide_main_window_in_task_bar>();
     bind<Config::max_process_manager_rows>();
@@ -335,6 +320,7 @@ void ConfigurationManager::initOptions()
     bind<Config::filter_case_insensitive>();
 
     bind<Config::native_menu_bar>();
+    bind<Config::native_tray_menu>();
 
     bind<Config::script_paste_delay_ms>();
 
@@ -343,11 +329,19 @@ void ConfigurationManager::initOptions()
     bind<Config::window_wait_raised_ms>();
     bind<Config::window_wait_after_raised_ms>();
     bind<Config::window_key_press_time_ms>();
-    bind<Config::window_wait_for_modifiers_released_ms>();
+    bind<Config::window_wait_for_modifier_released_ms>();
+
+    bind<Config::update_clipboard_owner_delay_ms>();
 
     bind<Config::style>();
 
     bind<Config::row_index_from_one>();
+
+    bind<Config::tabs>();
+
+    bind<Config::restore_geometry>();
+
+    bind<Config::close_on_unfocus_delay_ms>();
 }
 
 template <typename Config, typename Widget>
@@ -359,7 +353,7 @@ void ConfigurationManager::bind(Widget *obj)
 template <typename Config>
 void ConfigurationManager::bind()
 {
-    bind(Config::name(), QVariant::fromValue(Config::defaultValue()));
+    bind(Config::name(), QVariant::fromValue(Config::defaultValue()), Config::description());
 }
 
 void ConfigurationManager::bind(const QString &optionKey, QCheckBox *obj, bool defaultValue)
@@ -382,9 +376,9 @@ void ConfigurationManager::bind(const QString &optionKey, QComboBox *obj, int de
     m_options[optionKey] = Option(defaultValue, "currentIndex", obj);
 }
 
-void ConfigurationManager::bind(const QString &optionKey, const QVariant &defaultValue)
+void ConfigurationManager::bind(const QString &optionKey, const QVariant &defaultValue, const char *description)
 {
-    m_options[optionKey] = Option(defaultValue);
+    m_options[optionKey] = Option(defaultValue, description);
 }
 
 void ConfigurationManager::updateTabComboBoxes()
@@ -400,6 +394,8 @@ QStringList ConfigurationManager::options() const
         const auto &option = it.key();
         if ( it.value().value().canConvert(QVariant::String) )
             options.append(option);
+        else if ( it.value().value().canConvert(QVariant::StringList) )
+            options.append(option);
     }
 
     return options;
@@ -410,18 +406,20 @@ QVariant ConfigurationManager::optionValue(const QString &name) const
     return m_options.value(name).value();
 }
 
-bool ConfigurationManager::setOptionValue(const QString &name, const QString &value)
+bool ConfigurationManager::setOptionValue(const QString &name, const QVariant &value, AppConfig *appConfig)
 {
     if ( !m_options.contains(name) )
         return false;
 
     const QString oldValue = optionValue(name).toString();
-    m_options[name].setValue(value);
-    if ( optionValue(name) == oldValue )
+    Option &option = m_options[name];
+    option.setValue(value);
+    if ( option.value() == oldValue )
         return false;
 
-    AppConfig().setOption(name, m_options[name].value());
-    return true;
+    appConfig->setOption(name, option.value());
+    option.setValue(appConfig->option(name));
+    return option.value() != oldValue;
 }
 
 QString ConfigurationManager::optionToolTip(const QString &name) const
@@ -429,9 +427,9 @@ QString ConfigurationManager::optionToolTip(const QString &name) const
     return m_options[name].tooltip();
 }
 
-void ConfigurationManager::loadSettings()
+void ConfigurationManager::loadSettings(AppConfig *appConfig)
 {
-    QSettings settings;
+    Settings &settings = appConfig->settings();
 
     settings.beginGroup("Options");
     for (auto it = m_options.begin(); it != m_options.end(); ++it) {
@@ -455,7 +453,7 @@ void ConfigurationManager::loadSettings()
     m_tabAppearance->loadTheme(settings);
     settings.endGroup();
 
-    m_tabAppearance->setEditor( AppConfig().option<Config::editor>() );
+    m_tabAppearance->setEditor( appConfig->option<Config::editor>() );
 
     onCheckBoxMenuTabIsCurrentStateChanged( m_tabTray->checkBoxMenuTabIsCurrent->checkState() );
 
@@ -469,10 +467,12 @@ void ConfigurationManager::onButtonBoxClicked(QAbstractButton* button)
     int answer;
 
     switch( ui->buttonBox->buttonRole(button) ) {
-    case QDialogButtonBox::ApplyRole:
-        apply();
-        emit configurationChanged();
+    case QDialogButtonBox::ApplyRole: {
+        AppConfig appConfig;
+        apply(&appConfig);
+        emit configurationChanged(&appConfig);
         break;
+    }
     case QDialogButtonBox::AcceptRole:
         accept();
         break;
@@ -517,25 +517,25 @@ void ConfigurationManager::connectSlots()
             this, &ConfigurationManager::onSpinBoxTrayItemsValueChanged);
 }
 
-void ConfigurationManager::apply()
+void ConfigurationManager::apply(AppConfig *appConfig)
 {
-    Settings settings;
+    Settings &settings = appConfig->settings();
 
     settings.beginGroup("Options");
     for (auto it = m_options.constBegin(); it != m_options.constEnd(); ++it)
         settings.setValue( it.key(), it.value().value() );
     settings.endGroup();
 
-    m_tabTabs->saveTabs(settings.settingsData());
+    m_tabTabs->saveTabs(&settings);
 
     // Save configuration without command line alternatives only if option widgets are initialized
     // (i.e. clicked OK or Apply in configuration dialog).
     settings.beginGroup("Shortcuts");
-    m_tabShortcuts->saveShortcuts(settings.settingsData());
+    m_tabShortcuts->saveShortcuts(&settings);
     settings.endGroup();
 
     settings.beginGroup("Theme");
-    m_tabAppearance->saveTheme(settings.settingsData());
+    m_tabAppearance->saveTheme(&settings);
     settings.endGroup();
 
     // Save settings for each plugin.
@@ -546,7 +546,8 @@ void ConfigurationManager::apply()
 
     for (int i = 0; i < m_tabItems->itemCount(); ++i) {
         const QString loaderId = m_tabItems->data(i).toString();
-        Q_ASSERT(!loaderId.isEmpty());
+        if ( loaderId.isEmpty() )
+            continue;
 
         pluginPriority.append(loaderId);
 
@@ -556,9 +557,7 @@ void ConfigurationManager::apply()
         if (w) {
             PluginWidget *pluginWidget = qobject_cast<PluginWidget *>(w);
             const auto &loader = pluginWidget->loader();
-            const QVariantMap s = loader->applySettings();
-            for (auto it = s.constBegin(); it != s.constEnd(); ++it)
-                settings.setValue( it.key(), it.value() );
+            loader->applySettings(settings);
         }
 
         const bool isPluginEnabled = m_tabItems->isItemChecked(i);
@@ -572,9 +571,9 @@ void ConfigurationManager::apply()
     if (!pluginPriority.isEmpty())
         settings.setValue("plugin_priority", pluginPriority);
 
-    m_tabAppearance->setEditor( AppConfig().option<Config::editor>() );
+    m_tabAppearance->setEditor( appConfig->option<Config::editor>() );
 
-    setAutostartEnable();
+    setAutostartEnable(appConfig);
 
     // Language changes after restart.
     const int newLocaleIndex = m_tabGeneral->comboBoxLanguage->currentIndex();
@@ -595,8 +594,9 @@ void ConfigurationManager::apply()
 void ConfigurationManager::done(int result)
 {
     if (result == QDialog::Accepted) {
-        apply();
-        emit configurationChanged();
+        AppConfig appConfig;
+        apply(&appConfig);
+        emit configurationChanged(&appConfig);
     }
 
     QDialog::done(result);

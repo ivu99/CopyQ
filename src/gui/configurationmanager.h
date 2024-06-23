@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #ifndef CONFIGURATIONMANAGER_H
 #define CONFIGURATIONMANAGER_H
@@ -36,6 +19,7 @@ namespace Ui {
     class ConfigurationManager;
 }
 
+class AppConfig;
 class ConfigTabAppearance;
 class ConfigTabTabs;
 class ItemFactory;
@@ -71,7 +55,7 @@ public:
     QVariant optionValue(const QString &name) const;
 
     /** Set value of an option and returns true only if the value changes. */
-    bool setOptionValue(const QString &name, const QString &value);
+    bool setOptionValue(const QString &name, const QVariant &value, AppConfig *appConfig);
 
     /** Return tooltip text for option with given @a name. */
     QString optionToolTip(const QString &name) const;
@@ -79,23 +63,23 @@ public:
     void setVisible(bool visible) override;
 
     /** Load settings from default file. */
-    void loadSettings();
+    void loadSettings(AppConfig *appConfig);
 
     /** Enable/disable autostarting the application. */
-    void setAutostartEnable();
+    void setAutostartEnable(AppConfig *appConfig);
 
     void done(int result) override;
 
 signals:
     /** Emitted if configuration changes (after saveSettings() call). */
-    void configurationChanged();
+    void configurationChanged(AppConfig *appConfig);
 
     void error(const QString &error);
 
 private:
     void connectSlots();
 
-    void apply();
+    void apply(AppConfig *appConfig);
     void onButtonBoxClicked(QAbstractButton* button);
 
     void onCheckBoxMenuTabIsCurrentStateChanged(int);
@@ -125,7 +109,7 @@ private:
     void bind(const QString &optionKey, QSpinBox  *obj, int defaultValue);
     void bind(const QString &optionKey, QLineEdit *obj, const QString &defaultValue);
     void bind(const QString &optionKey, QComboBox *obj, int defaultValue);
-    void bind(const QString &optionKey, const QVariant &defaultValue);
+    void bind(const QString &optionKey, const QVariant &defaultValue, const char *description);
 
     void updateTabComboBoxes();
 

@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "tabbar.h"
 
@@ -45,12 +28,6 @@ int tabIndex(const QString &tabName, const TabBar &parent)
     }
 
     return -1;
-}
-
-void updateTabIcon(int i, TabBar *parent)
-{
-    const QIcon icon = getIconForTabName(parent->tabName(i));
-    parent->setTabIcon(i, icon);
 }
 
 } // namespace
@@ -114,13 +91,16 @@ void TabBar::setTabItemCount(const QString &tabName, const QString &itemCount)
     updateTabStyle(i);
 }
 
-void TabBar::updateTabIcon(const QString &tabName)
+void TabBar::setTabIcon(int index, const QString &icon)
+{
+    QTabBar::setTabIcon(index, icon.isEmpty() ? QIcon() : iconFromFile(icon));
+}
+
+void TabBar::setTabIcon(const QString &tabName, const QString &icon)
 {
     const int i = tabIndex(tabName, *this);
-    if (i == -1)
-        return;
-
-    ::updateTabIcon(i, this);
+    if (i != -1)
+        setTabIcon(i, icon);
 }
 
 void TabBar::insertTab(int index, const QString &tabName)
@@ -134,15 +114,13 @@ void TabBar::removeTab(int index)
     QTabBar::removeTab(index);
 }
 
-void TabBar::moveTab(int from, int to)
+void TabBar::updateTabIcons(const QHash<QString, QString> &tabIcons)
 {
-    QTabBar::moveTab(from, to);
-}
-
-void TabBar::updateTabIcons()
-{
-    for (int i = 0; i < count(); ++i)
-        ::updateTabIcon(i, this);
+    for (int i = 0; i < count(); ++i) {
+        const QString name = tabName(i);
+        const QString icon = tabIcons.value(name);
+        setTabIcon(i, icon);
+    }
 }
 
 void TabBar::nextTab()
@@ -205,16 +183,17 @@ void TabBar::dropEvent(QDropEvent *event)
 {
     int tabIndex = dropItemsTabIndex(*event, *this);
 
-    if ( tabIndex != -1 )
+    if ( tabIndex != -1 ) {
+        acceptDrag(event);
         emit dropItems( tabName(tabIndex), event->mimeData() );
-    else
+    } else {
         QTabBar::dropEvent(event);
+    }
 }
 
 void TabBar::tabInserted(int index)
 {
     QTabBar::tabInserted(index);
-    ::updateTabIcon(index, this);
     updateTabStyle(index);
 }
 

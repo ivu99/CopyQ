@@ -1,27 +1,11 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #ifndef TABSWIDGETINTERFACE_H
 #define TABSWIDGETINTERFACE_H
 
+#include <QtContainerFwd>
+
 class QString;
-class QStringList;
 
 class TabsWidgetInterface {
 public:
@@ -42,21 +26,18 @@ public:
 
     virtual void setTabItemCount(const QString &tabName, const QString &itemCount) = 0;
 
-    virtual void updateTabIcon(const QString &tabName) = 0;
+    virtual void setTabIcon(const QString &tabName, const QString &icon) = 0;
 
     virtual void insertTab(int tabIndex, const QString &tabName) = 0;
 
     /** Remove tab with given @a index. */
     virtual void removeTab(int index) = 0;
 
-    /** Change tab index of tab. */
-    virtual void moveTab(int from, int to) = 0;
+    virtual void updateCollapsedTabs(QList<QString> *collapsedTabs) const = 0;
 
-    virtual void updateCollapsedTabs(QStringList *collapsedTabs) const = 0;
+    virtual void setCollapsedTabs(const QList<QString> &collapsedTabs) = 0;
 
-    virtual void setCollapsedTabs(const QStringList &collapsedTabs) = 0;
-
-    virtual void updateTabIcons() = 0;
+    virtual void updateTabIcons(const QHash<QString, QString> &tabIcons) = 0;
 
     virtual void nextTab() = 0;
     virtual void previousTab() = 0;

@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "itemstore.h"
 
@@ -23,10 +6,13 @@
 #include "common/log.h"
 #include "common/textdata.h"
 #include "item/itemfactory.h"
+#include "item/serialize.h"
 
 #include <QAbstractItemModel>
 #include <QDir>
 #include <QFile>
+#include <QSaveFile>
+#include <QSet>
 
 namespace {
 
@@ -34,26 +20,12 @@ namespace {
 QString itemFileName(const QString &id)
 {
     QString part( id.toUtf8().toBase64() );
-    part.replace( QChar('/'), QString('-') );
+    part.replace( QChar('/'), QChar('-') );
     return getConfigurationFilePath("_tab_") + part + QLatin1String(".dat");
 }
 
-bool createItemDirectory()
-{
-    QDir settingsDir( settingsDirectoryPath() );
-    if ( !settingsDir.mkpath(".") ) {
-        log( QString("Cannot create directory for settings %1!")
-             .arg(quoteString(settingsDir.path()) ),
-             LogError );
-
-        return false;
-    }
-
-    return true;
-}
-
 void printItemFileError(
-        const QString &action, const QString &id, const QFile &file)
+        const QString &action, const QString &id, const QFileDevice &file)
 {
     log( QString("Tab %1: Failed to %2, file %3: %4").arg(
              quoteString(id),
@@ -67,7 +39,7 @@ ItemSaverPtr loadItems(
         const QString &tabName, const QString &tabFileName,
         QAbstractItemModel &model, ItemFactory *itemFactory, int maxItems)
 {
-    COPYQ_LOG( QString("Tab \"%1\": Loading items").arg(tabName) );
+    COPYQ_LOG( QString("Tab \"%1\": Loading items from: %2").arg(tabName, tabFileName) );
 
     QFile tabFile(tabFileName);
     if ( !tabFile.open(QIODevice::ReadOnly) ) {
@@ -95,88 +67,84 @@ ItemSaverPtr createTab(
     return saver;
 }
 
+bool itemDataFiles(const QString &tabName, QStringList *files)
+{
+    const QString tabFileName = itemFileName(tabName);
+    if ( !QFile::exists(tabFileName) )
+        return true;
+
+    QFile tabFile(tabFileName);
+    if ( !tabFile.open(QIODevice::ReadOnly) ) {
+        printItemFileError("read tab", tabName, tabFile);
+        return false;
+    }
+
+    return itemDataFiles(&tabFile, files);
+}
+
+void cleanDataDir(QDir *dir)
+{
+    if ( dir->isEmpty() )
+        QDir().rmdir( dir->absolutePath() );
+}
+
 } // namespace
 
 ItemSaverPtr loadItems(const QString &tabName, QAbstractItemModel &model, ItemFactory *itemFactory, int maxItems)
 {
-    if ( !createItemDirectory() )
-        return nullptr;
-
     const QString tabFileName = itemFileName(tabName);
+    if ( !QFile::exists(tabFileName) )
+        return createTab(tabName, model, itemFactory, maxItems);
 
-    ItemSaverPtr saver;
-
-    // If tab file doesn't exist, try to restore data from temporary file.
-    if ( !QFile::exists(tabFileName) ) {
-        QFile tmpFile(tabFileName + ".tmp");
-        if ( tmpFile.exists() ) {
-            log( QString("Tab \"%1\": Restoring items (previous save failed)").arg(tabName), LogWarning );
-
-            saver = loadItems(tabName, tmpFile.fileName(), model, itemFactory, maxItems);
-            if ( saver && !tmpFile.rename(tabFileName) )
-                printItemFileError("overwrite original file", tabName, tmpFile);
-        }
+    ItemSaverPtr saver = loadItems(tabName, tabFileName, model, itemFactory, maxItems);
+    if (saver) {
+        COPYQ_LOG( QStringLiteral("Tab \"%1\": %2 items loaded from: %3")
+                      .arg(tabName, QString::number(model.rowCount()), tabFileName) );
+        return saver;
     }
 
-    if (!saver) {
-        saver = QFile::exists(tabFileName)
-                ? loadItems(tabName, tabFileName, model, itemFactory, maxItems)
-                : createTab(tabName, model, itemFactory, maxItems);
-    }
-
-    if (!saver) {
-        model.removeRows(0, model.rowCount());
-        return nullptr;
-    }
-
-    COPYQ_LOG( QString("Tab \"%1\": %2 items loaded").arg(tabName).arg(model.rowCount()) );
-
-    return saver;
+    log( QStringLiteral("Tab \"%1\": Failed to load tab file: %2")
+            .arg(tabName, tabFileName), LogError );
+    model.removeRows(0, model.rowCount());
+    return nullptr;
 }
 
 bool saveItems(const QString &tabName, const QAbstractItemModel &model, const ItemSaverPtr &saver)
 {
     const QString tabFileName = itemFileName(tabName);
 
-    if ( !createItemDirectory() )
+    if ( !ensureSettingsDirectoryExists() )
         return false;
 
-    // Save to temp file.
-    QFile tmpFile( tabFileName + ".tmp" );
-    if ( !tmpFile.open(QIODevice::WriteOnly) ) {
-        printItemFileError("save tab (open temporary file)", tabName, tmpFile);
-        return false;
-    }
-
-    COPYQ_LOG( QString("Tab \"%1\": Saving %2 items").arg(tabName).arg(model.rowCount()) );
-
-    if ( !saver->saveItems(tabName, model, &tmpFile) ) {
-        printItemFileError("save tab (save items to temporary file)", tabName, tmpFile);
+    // Save tab data to a new temporary file.
+    QSaveFile tabFile(tabFileName);
+    tabFile.setDirectWriteFallback(false);
+    if ( !tabFile.open(QIODevice::WriteOnly) ) {
+        printItemFileError("save tab (open temporary file)", tabName, tabFile);
         return false;
     }
 
-    // 1. Safely flush all data to temporary file.
-    if ( !tmpFile.flush() ) {
-        printItemFileError("save tab (flush temporary file)", tabName, tmpFile);
+    COPYQ_LOG( QStringLiteral("Tab \"%1\": Saving %2 items")
+                  .arg(tabName, QString::number(model.rowCount())) );
+
+    if ( !saver->saveItems(tabName, model, &tabFile) ) {
+        tabFile.cancelWriting();
+        printItemFileError("save tab (save items to temporary file)", tabName, tabFile);
         return false;
     }
 
-    // 2. Remove old tab file.
-    {
-        QFile oldTabFile(tabFileName);
-        if (oldTabFile.exists() && !oldTabFile.remove()) {
-            printItemFileError("save tab (remove file)", tabName, oldTabFile);
-            return false;
-        }
-    }
-
-    // 3. Overwrite previous file.
-    if ( !tmpFile.rename(tabFileName) ) {
-        printItemFileError("save tab (overwrite original file)", tabName, tmpFile);
+    if ( !tabFile.flush() ) {
+        tabFile.cancelWriting();
+        printItemFileError("save tab (flush to temporary file)", tabName, tabFile);
         return false;
     }
 
-    COPYQ_LOG( QString("Tab \"%1\": Items saved").arg(tabName) );
+    if ( !tabFile.commit() ) {
+        printItemFileError("save tab (commit)", tabName, tabFile);
+        return false;
+    }
+
+    COPYQ_LOG( QStringLiteral("Tab \"%1\": Items saved").arg(tabName) );
 
     return true;
 }
@@ -185,7 +153,6 @@ void removeItems(const QString &tabName)
 {
     const QString tabFileName = itemFileName(tabName);
     QFile::remove(tabFileName);
-    QFile::remove(tabFileName + ".tmp");
 }
 
 bool moveItems(const QString &oldId, const QString &newId)
@@ -206,4 +173,45 @@ bool moveItems(const QString &oldId, const QString &newId)
        ), LogError );
 
     return false;
+}
+
+void cleanDataFiles(const QStringList &tabNames)
+{
+    QDir dir(itemDataPath());
+    if ( !dir.exists() )
+        return;
+
+    QStringList files;
+    for (const QString &tabName : tabNames) {
+        if ( !itemDataFiles(tabName, &files) ) {
+            COPYQ_LOG( QStringLiteral("Stopping cleanup due to corrupted file: %1")
+                    .arg(tabName) );
+            return;
+        }
+    }
+
+#if QT_VERSION >= QT_VERSION_CHECK(5,14,0)
+    const QSet<QString> fileSet(files.constBegin(), files.constEnd());
+#else
+    const QSet<QString> fileSet = files.toSet();
+#endif
+    for ( const auto &i1 : dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot) ) {
+        QDir d1(i1.absoluteFilePath());
+        for ( const auto &i2 : d1.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot) ) {
+            QDir d2(i2.absoluteFilePath());
+            for ( const auto &i3 : d2.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot) ) {
+                QDir d3(i3.absoluteFilePath());
+                for ( const auto &f : d3.entryInfoList(QDir::Files) ) {
+                    const QString path = f.absoluteFilePath();
+                    if ( !fileSet.contains(path) ) {
+                        COPYQ_LOG( QStringLiteral("Cleaning: %1").arg(path) );
+                        QFile::remove(path);
+                    }
+                }
+                cleanDataDir(&d3);
+            }
+            cleanDataDir(&d2);
+        }
+        cleanDataDir(&d1);
+    }
 }

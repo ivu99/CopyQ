@@ -1,26 +1,9 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #ifndef TABWIDGET_H
 #define TABWIDGET_H
 
-#include <QMap>
+#include <QHash>
 #include <QTabBar>
 #include <QWidget>
 
@@ -29,6 +12,7 @@
 class QMainWindow;
 class QMimeData;
 class QPoint;
+class QSettings;
 class QStackedWidget;
 class QToolBar;
 class TabsWidgetInterface;
@@ -66,7 +50,7 @@ public:
 
     void setTabItemCountVisible(bool visible);
 
-    void updateTabIcon(const QString &tabName);
+    void setTabIcon(const QString &tabName, const QString &icon);
 
     void insertTab(int tabIndex, QWidget *widget, const QString &tabName);
 
@@ -77,15 +61,13 @@ public:
     /** Return tab names. */
     QStringList tabs() const;
 
-    void moveTab(int from, int to);
-
     void addToolBars(QMainWindow *mainWindow);
 
     void saveTabInfo();
 
     void loadTabInfo();
 
-    void updateTabs();
+    void updateTabs(QSettings &settings);
 
     QToolBar *toolBar() const { return m_toolBarCurrent; }
 
@@ -95,6 +77,8 @@ public:
     void setTabBarHidden(bool hidden);
     void setTreeModeEnabled(bool enabled);
     void setTabItemCount(const QString &tabName, int itemCount);
+
+    void setTabsOrder(const QStringList &tabs);
 
 signals:
     /// Tabs moved in tab bar.
@@ -123,6 +107,8 @@ private:
     void updateTabItemCount(const QString &name);
     QString itemCountLabel(const QString &name);
 
+    void setTreeModeEnabled(bool enabled, const QStringList &tabs);
+
     QToolBar *m_toolBar;
     QToolBar *m_toolBarTree;
     QToolBar *m_toolBarCurrent;
@@ -132,7 +118,7 @@ private:
     bool m_hideTabBar;
 
     QStringList m_collapsedTabs;
-    QMap<QString, int> m_tabItemCounters;
+    QHash<QString, int> m_tabItemCounters;
 
     bool m_showTabItemCount;
 

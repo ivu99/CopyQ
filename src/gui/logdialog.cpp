@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "gui/logdialog.h"
 #include "ui_logdialog.h"
 
@@ -37,18 +20,32 @@ namespace {
 const int maxDisplayLogSize = 128 * 1024;
 const auto logLinePrefix = "CopyQ ";
 
-void showLogLines(QString *content, bool show, LogLevel level)
+void removeLogLines(QByteArray *content, LogLevel level)
 {
-    if (show)
-        return;
+    const QByteArray label = logLinePrefix + logLevelLabel(level);
+    if ( content->startsWith(label) ) {
+        const int i = content->indexOf('\n');
+        if (i == -1) {
+            content->clear();
+            return;
+        }
+        content->remove(0, i);
+    }
 
-    const QString label = logLinePrefix + logLevelLabel(level);
+    const QByteArray labelLine = '\n' + label;
+    for (;;) {
+        const int i = content->indexOf(labelLine);
+        if (i == -1)
+            break;
 
-    const QRegularExpression re("\n" + label + "[^\n]*");
-    content->remove(re);
+        const int j = content->indexOf('\n', i + 1);
+        if (j == -1) {
+            content->remove(i, content->size());
+            break;
+        }
 
-    const QRegularExpression re2("^" + label + "[^\n]*\n");
-    content->remove(re2);
+        content->remove(i, j - i);
+    }
 }
 
 } // namespace
@@ -257,7 +254,7 @@ LogDialog::~LogDialog()
 
 void LogDialog::updateLog()
 {
-    QString content = readLogFile(maxDisplayLogSize);
+    QByteArray content = readLogFile(maxDisplayLogSize);
 
     // Remove first line if incomplete.
     if ( !content.startsWith(logLinePrefix) ) {
@@ -265,19 +262,24 @@ void LogDialog::updateLog()
         content.remove(0, i + 1);
     }
 
-    showLogLines(&content, m_showError, LogError);
-    showLogLines(&content, m_showWarning, LogWarning);
-    showLogLines(&content, m_showNote, LogNote);
-    showLogLines(&content, m_showDebug, LogDebug);
-    showLogLines(&content, m_showTrace, LogTrace);
+    if(!m_showTrace)
+        removeLogLines(&content, LogTrace);
+    if(!m_showDebug)
+        removeLogLines(&content, LogDebug);
+    if(!m_showNote)
+        removeLogLines(&content, LogNote);
+    if(!m_showWarning)
+        removeLogLines(&content, LogWarning);
+    if(!m_showError)
+        removeLogLines(&content, LogError);
 
     // Remove common prefix.
-    const QString prefix = logLinePrefix;
+    const QByteArray prefix = logLinePrefix;
     if ( content.startsWith(prefix) )
         content.remove( 0, prefix.size() );
-    content.replace("\n" + prefix, "\n");
+    content.replace('\n' + prefix, "\n");
 
-    ui->textBrowserLog->setPlainText(content);
+    ui->textBrowserLog->setPlainText(QString::fromUtf8(content));
 
     ui->textBrowserLog->moveCursor(QTextCursor::End);
 

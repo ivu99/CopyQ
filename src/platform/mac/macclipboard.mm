@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "macclipboard.h"
 
@@ -26,21 +9,32 @@
 #include "platform/platformwindow.h"
 
 #include <QApplication>
+#include <QClipboard>
 #include <QMimeData>
-#include <QTextCodec>
+
+#if QT_VERSION >= QT_VERSION_CHECK(6,0,0)
+#   include <QStringEncoder>
+#else
+#   include <QTextCodec>
+#endif
 
 #include "mactimer.h"
 
 #include <Cocoa/Cocoa.h>
 #include <Carbon/Carbon.h>
 
-void MacClipboard::startMonitoring(const QStringList &)
+void MacClipboard::startMonitoring(const QStringList &formats)
 {
+    NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+    m_prevChangeCount = [pasteboard changeCount];
+
     auto timer = new MacTimer(this);
     timer->setInterval(250);
     timer->setTolerance(500);
     connect(timer, &MacTimer::timeout, this, &MacClipboard::clipboardTimeout);
     timer->start();
+
+    DummyClipboard::startMonitoring(formats);
 }
 
 void MacClipboard::setData(ClipboardMode mode, const QVariantMap &dataMap)
@@ -52,31 +46,44 @@ void MacClipboard::setData(ClipboardMode mode, const QVariantMap &dataMap)
     // This converts text to UTF-16 without BOM.
     const auto text = getTextData(dataMap);
     if ( !text.isEmpty() ) {
-        auto codec = QTextCodec::codecForName("UTF-16");
+#if QT_VERSION >= QT_VERSION_CHECK(6,0,0)
+        auto encoder = QStringEncoder(QStringConverter::Utf16);
+        const QByteArray data = encoder.encode(text);
+        dataMapForMac[QStringLiteral("public.utf16-plain-text")] = data;
+#else
+        auto codec = QTextCodec::codecForName(QStringLiteral("UTF-16"));
         Q_ASSERT(codec != nullptr);
         if (codec) {
             auto encoder = codec->makeEncoder(QTextCodec::IgnoreHeader);
-            dataMapForMac["public.utf16-plain-text"] = encoder->fromUnicode(text);
+            dataMapForMac[QStringLiteral("public.utf16-plain-text")] = encoder->fromUnicode(text);
         }
+#endif
     }
 
-    return DummyClipboard::setData(mode, dataMapForMac);
+    DummyClipboard::setData(mode, dataMapForMac);
 }
 
-QByteArray MacClipboard::clipboardOwner()
+bool MacClipboard::isHidden(const QMimeData &data) const
 {
-    PlatformWindowPtr currentWindow = platformNativeInterface()->getCurrentWindow();
-    if (currentWindow)
-        return currentWindow->getTitle().toUtf8();
-    return QByteArray();
+    return data.hasFormat( QStringLiteral("application/x-nspasteboard-concealed-type") );
 }
 
-void MacClipboard::clipboardTimeout() {
+void MacClipboard::onChanged(int mode)
+{
+    if (mode != QClipboard::Clipboard)
+        return;
+
     NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
     NSInteger newCount = [pasteboard changeCount];
 
-    if (newCount != m_prevChangeCount) {
-        m_prevChangeCount = newCount;
-        emit changed(ClipboardMode::Clipboard);
-    }
+    if (newCount == m_prevChangeCount)
+        return;
+
+    m_prevChangeCount = newCount;
+
+    emit changed(ClipboardMode::Clipboard);
+}
+
+void MacClipboard::clipboardTimeout() {
+    onChanged(QClipboard::Clipboard);
 }

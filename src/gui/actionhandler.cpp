@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "actionhandler.h"
 
@@ -46,14 +29,9 @@ QString actionDescription(const Action &action)
 {
     const auto name = action.name();
     if ( !name.isEmpty() )
-        return QString::fromLatin1("Command \"%1\"").arg(name);
+        return QStringLiteral("Command \"%1\"").arg(name);
 
     return action.commandLine();
-}
-
-uint maxRowCount()
-{
-    return AppConfig().option<Config::max_process_manager_rows>();
 }
 
 } // namespace
@@ -61,8 +39,13 @@ uint maxRowCount()
 ActionHandler::ActionHandler(NotificationDaemon *notificationDaemon, QObject *parent)
     : QObject(parent)
     , m_notificationDaemon(notificationDaemon)
-    , m_actionModel(new ActionTableModel(maxRowCount(), parent))
+    , m_actionModel(new ActionTableModel(parent))
 {
+}
+
+void ActionHandler::setMaxRowCount(uint rows)
+{
+    m_actionModel->setMaxRowCount(rows);
 }
 
 void ActionHandler::showProcessManagerDialog(QWidget *parent)
@@ -115,7 +98,7 @@ void ActionHandler::action(Action *action)
     action->setId(id);
     m_actions.insert(id, action);
 
-    COPYQ_LOG( QString("Executing: %1").arg(actionDescription(*action)) );
+    COPYQ_LOG( QStringLiteral("Executing: %1").arg(actionDescription(*action)) );
     action->start();
 }
 
@@ -133,17 +116,17 @@ void ActionHandler::closeAction(Action *action)
 
     if ( action->actionFailed() ) {
         const auto msg = tr("Error: %1").arg(action->errorString());
-        showActionErrors(action, msg, IconExclamationCircle);
+        showActionErrors(action, msg, IconCircleExclamation);
 #ifdef Q_OS_WIN
     // FIXME: Ignore specific exit code for clipboard monitor on Windows when logging out.
     } else if ( action->exitCode() == 1073807364 ) {
-        COPYQ_LOG( QString("Exit code %1 (on logout?) with command: %2")
+        COPYQ_LOG( QStringLiteral("Exit code %1 (on logout?) with command: %2")
                    .arg(action->exitCode())
                    .arg(action->commandLine()) );
 #endif
     } else if ( action->exitCode() != 0 ) {
         const auto msg = tr("Exit code: %1").arg(action->exitCode());
-        showActionErrors(action, msg, IconTimesCircle);
+        showActionErrors(action, msg, IconCircleXmark);
     }
 
     m_actionModel->actionFinished(action);
@@ -168,9 +151,9 @@ void ActionHandler::showActionErrors(Action *action, const QString &message, ush
     const int maxWidthPoints =
             AppConfig().option<Config::notification_maximum_width>();
     const QString command = action->commandLine()
-            .replace("copyq eval --", "copyq:");
+            .replace(QLatin1String("copyq eval --"), QLatin1String("copyq:"));
     const QString name = action->name().isEmpty()
-            ? QString(command).replace('\n', " ")
+            ? QString(command).replace('\n', QLatin1String(" "))
             : action->name();
     const QString format = tr("Command %1").arg(quoteString("%1"));
     const QString title = elideText(name, QFont(), format, pointsToPixels(maxWidthPoints));
@@ -180,13 +163,12 @@ void ActionHandler::showActionErrors(Action *action, const QString &message, ush
     const auto lines = command.split("\n");
     const auto lineNumberWidth = static_cast<int>(std::log10(lines.size())) + 1;
     for (const auto &line : lines)
-        msg.append(QString::fromLatin1("\n%1. %2").arg(++lineNumber, lineNumberWidth).arg(line));
+        msg.append(QStringLiteral("\n%1. %2").arg(++lineNumber, lineNumberWidth).arg(line));
 
-    log(title + "\n" + msg);
+    log(QStringLiteral("%1\n%2").arg(title, msg));
 
     auto notification = m_notificationDaemon->createNotification(notificationId);
     notification->setTitle(title);
     notification->setMessage(msg, Qt::PlainText);
     notification->setIcon(icon);
-    notification->show();
 }

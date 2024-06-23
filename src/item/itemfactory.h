@@ -1,33 +1,14 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #ifndef ITEMFACTORY_H
 #define ITEMFACTORY_H
 
+#include "common/command.h"
 #include "item/itemwidget.h"
 
 #include <QMap>
 #include <QObject>
-#include <QSet>
-#include <QVector>
-
-#include <memory>
+#include <QtContainerFwd>
 
 class ItemLoaderInterface;
 class ItemWidget;
@@ -40,7 +21,7 @@ class QWidget;
 struct Command;
 struct CommandMenu;
 
-using ItemLoaderList = QVector<ItemLoaderPtr>;
+using ItemLoaderList = QList<ItemLoaderPtr>;
 
 /**
  * Loads item plugins (loaders) and instantiates ItemWidget objects using appropriate
@@ -89,19 +70,9 @@ public:
      * Method createItem() tries to instantiate ItemWidget with loader in this order.
      *
      * If priority of a loader is not set here, it is sorted after using
-     * ItemLoaderInterface::priotity() after all loader explicitly sorted.
+     * ItemLoaderInterface::priority() after all loader explicitly sorted.
      */
     void setPluginPriority(const QStringList &pluginNames);
-
-    /**
-     * Enable or disable instantiation of ItemWidget objects using @a loader.
-     */
-    void setLoaderEnabled(const ItemLoaderPtr &loader, bool enabled);
-
-    /**
-     * Return true if @a loader is enabled.
-     */
-    bool isLoaderEnabled(const ItemLoaderPtr &loader) const;
 
     /**
      * Return true if no plugins were loaded.
@@ -152,9 +123,6 @@ private:
     /** Called if child ItemWidget destroyed. **/
     void loaderChildDestroyed(QObject *obj);
 
-    /** Return enabled plugins with dummy item loader. */
-    ItemLoaderList enabledLoaders(bool enabled = true) const;
-
     /** Calls ItemLoaderInterface::transform() for all plugins in reverse order. */
     ItemWidget *transformItem(ItemWidget *item, const QVariantMap &data);
 
@@ -166,7 +134,6 @@ private:
 
     ItemLoaderList m_loaders;
     ItemLoaderPtr m_dummyLoader;
-    ItemLoaderList m_disabledLoaders;
     QMap<QObject *, ItemLoaderPtr> m_loaderChildren;
 };
 

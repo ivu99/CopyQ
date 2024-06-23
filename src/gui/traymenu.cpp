@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "traymenu.h"
 
@@ -37,8 +20,7 @@
 
 namespace {
 
-const char propertyCustomAction[] = "CopyQ_tray_menu_custom_action";
-const char propertyClipboardItemAction[] = "CopyQ_tray_menu_clipboard_item";
+const char propertyTextFormat[] = "CopyQ_text_format";
 
 const QIcon iconClipboard() { return getIcon("clipboard", IconPaste); }
 
@@ -81,18 +63,53 @@ TrayMenu::TrayMenu(QWidget *parent)
 {
     m_clipboardItemActionsSeparator = addSeparator();
     m_customActionsSeparator = addSeparator();
-    initSingleShotTimer( &m_timerUpdateActiveAction, 0, this, &TrayMenu::updateActiveAction );
+    initSingleShotTimer( &m_timerUpdateActiveAction, 0, this, &TrayMenu::doUpdateActiveAction );
     setAttribute(Qt::WA_InputMethodEnabled);
 }
 
-void TrayMenu::addClipboardItemAction(const QVariantMap &data, bool showImages)
+void TrayMenu::updateTextFromData(QAction *act, const QVariantMap &data)
+{
+    const QString format = act->property(propertyTextFormat).toString();
+    const QString label = textLabelForData( data, act->font(), format, true );
+    act->setText(label);
+}
+
+bool TrayMenu::updateIconFromData(QAction *act, const QVariantMap &data)
+{
+    if ( !act->parentWidget() )
+        return false;
+
+    const QString icon = data.value(mimeIcon).toString();
+    const QString tag = data.value(COPYQ_MIME_PREFIX "item-tag").toString();
+
+    if ( icon.isEmpty() && tag.isEmpty() ) {
+        const QString colorName = data.value(mimeColor).toString();
+        if ( colorName.isEmpty() )
+            return false;
+
+        const QColor color(colorName);
+        if ( !color.isValid() )
+            return false;
+
+        QPixmap pix(16, 16);
+        pix.fill(color);
+        act->setIcon(pix);
+        return true;
+    }
+
+    const QColor color = getDefaultIconColor(*act->parentWidget());
+    act->setIcon( iconFromFile(icon, tag, color) );
+    return true;
+}
+
+QAction *TrayMenu::addClipboardItemAction(const QVariantMap &data, bool showImages)
 {
     // Show search text at top of the menu.
     if ( m_clipboardItemActionCount == 0 && m_searchText.isEmpty() )
         setSearchMenuItem( m_viMode ? tr("Press '/' to search") : tr("Type to search") );
 
     QAction *act = addAction(QString());
-    act->setProperty(propertyClipboardItemAction, true);
+    m_clipboardActions.append(act);
 
     act->setData(data);
 
@@ -106,15 +123,15 @@ void TrayMenu::addClipboardItemAction(const QVariantMap &data, bool showImages)
         format = tr("&%1. %2",
                     "Key hint (number shortcut) for items in tray menu (%1 is number, %2 is item label)")
                 .arg(rowNumber);
+        act->setProperty(propertyTextFormat, format);
     }
 
     m_clipboardItemActionCount++;
 
-    const QString label = textLabelForData( data, act->font(), format, true );
-    act->setText(label);
+    updateTextFromData(act, data);
 
     // Menu item icon from image.
-    if (showImages) {
+    if (!updateIconFromData(act, data) && showImages) {
         const QStringList formats = data.keys();
         static const QRegularExpression reImage("^image/.*");
         const int imageIndex = formats.indexOf(reImage);
@@ -137,23 +154,22 @@ void TrayMenu::addClipboardItemAction(const QVariantMap &data, bool showImages)
         }
     }
 
-    if ( act->icon().isNull() ) {
-        const QString icon = data.value(mimeIcon).toString();
-        if ( !icon.isEmpty() ) {
-            const QColor color = getDefaultIconColor(*this);
-            const QString tag = data.value(COPYQ_MIME_PREFIX "item-tag").toString();
-            act->setIcon( iconFromFile(icon, tag, color) );
-        }
-    }
-
     connect(act, &QAction::triggered, this, &TrayMenu::onClipboardItemActionTriggered);
 
-    updateActiveAction();
+    return act;
 }
 
 void TrayMenu::clearClipboardItems()
 {
-    clearActionsWithProperty(propertyClipboardItemAction);
+    const auto actions = m_clipboardActions;
+    m_clipboardActions = {};
+    for (QAction *action : actions) {
+        removeAction(action);
+        action->setVisible(false);
+        action->setDisabled(true);
+        action->setShortcuts({});
+        action->deleteLater();
+    }
 
     m_clipboardItemActionCount = 0;
 
@@ -164,18 +180,28 @@ void TrayMenu::clearClipboardItems()
 
 void TrayMenu::clearCustomActions()
 {
-    clearActionsWithProperty(propertyCustomAction);
+    const auto actions = m_customActions;
+    m_customActions = {};
+    for (QAction *action : actions) {
+        removeAction(action);
+        action->setVisible(false);
+        action->setDisabled(true);
+        action->setShortcuts({});
+        action->deleteLater();
+    }
 }
 
-void TrayMenu::addCustomAction(QAction *action)
+void TrayMenu::setCustomActions(QList<QAction*> actions)
 {
-    action->setProperty(propertyCustomAction, true);
-    insertAction(m_customActionsSeparator, action);
-    updateActiveAction();
+    clearCustomActions();
+    m_customActions = actions;
+    insertActions(m_customActionsSeparator, actions);
 }
 
 void TrayMenu::clearAllActions()
 {
+    m_clipboardActions = {};
+    m_customActions = {};
     clear();
     m_clipboardItemActionCount = 0;
     m_searchText.clear();
@@ -239,7 +265,8 @@ void TrayMenu::keyPressEvent(QKeyEvent *event)
                     if ( !m_numberSearch && m_searchText.isEmpty() ) {
                         bool ok;
                         const int row = txt.toInt(&ok);
-                        if (ok && row < m_clipboardItemActionCount) {
+                        const int start = static_cast<int>(m_rowIndexFromOne);
+                        if (ok && start <= row && row < start + m_clipboardItemActionCount) {
                             // Allow keypad digit to activate appropriate item in context menu.
                             if (event->modifiers() == Qt::KeypadModifier)
                                 event->setModifiers(Qt::NoModifier);
@@ -273,6 +300,9 @@ void TrayMenu::showEvent(QShowEvent *event)
     if ( !m_searchAction.isNull() )
         m_searchAction->setVisible(true);
 
+    if ( m_timerUpdateActiveAction.isActive() )
+        doUpdateActiveAction();
+
     QMenu::showEvent(event);
 }
 
@@ -286,8 +316,8 @@ void TrayMenu::hideEvent(QHideEvent *event)
 
 void TrayMenu::actionEvent(QActionEvent *event)
 {
+    delayedUpdateActiveAction();
     QMenu::actionEvent(event);
-    m_timerUpdateActiveAction.start();
 }
 
 void TrayMenu::leaveEvent(QEvent *event)
@@ -303,16 +333,6 @@ void TrayMenu::inputMethodEvent(QInputMethodEvent *event)
     if (!event->commitString().isEmpty())
         search(m_searchText + event->commitString());
     event->ignore();
-}
-
-void TrayMenu::clearActionsWithProperty(const char *property)
-{
-    for ( auto action : actions() ) {
-        if ( action->property(property).toBool() ) {
-            removeAction(action);
-            delete action;
-        }
-    }
 }
 
 void TrayMenu::search(const QString &text)
@@ -343,7 +363,7 @@ void TrayMenu::markItemInClipboard(const QVariantMap &clipboardData)
 void TrayMenu::setSearchMenuItem(const QString &text)
 {
     if ( m_searchAction.isNull() ) {
-        const QIcon icon = getIcon("edit-find", IconSearch);
+        const QIcon icon = getIcon("edit-find", IconMagnifyingGlass);
         m_searchAction = new QAction(icon, text, this);
         m_searchAction->setEnabled(false);
         // Search menu item is hidden by default, see showEvent().
@@ -364,11 +384,15 @@ void TrayMenu::onClipboardItemActionTriggered()
     close();
 }
 
-void TrayMenu::updateActiveAction()
+void TrayMenu::delayedUpdateActiveAction()
 {
-    if ( isVisible() && activeAction() != nullptr )
-        return;
+    if ( !isVisible() || activeAction() == nullptr )
+        m_timerUpdateActiveAction.start();
+}
 
+void TrayMenu::doUpdateActiveAction()
+{
+    m_timerUpdateActiveAction.stop();
     const auto action = firstEnabledAction(this);
     if (action != nullptr)
         setActiveAction(action);

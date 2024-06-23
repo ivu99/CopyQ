@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "option.h"
 
@@ -58,6 +41,13 @@ Option::Option(const QVariant &default_value, const char *property_name,
         m_obj->setProperty(m_property_name, m_default_value);
 }
 
+Option::Option(const QVariant &default_value, const char *description)
+    : m_default_value(default_value)
+    , m_value(m_default_value)
+    , m_description(description)
+{
+}
+
 QVariant Option::value() const
 {
     return m_obj != nullptr ? m_obj->property(m_property_name) : m_value;
@@ -81,5 +71,16 @@ void Option::reset()
 
 QString Option::tooltip() const
 {
-    return m_obj != nullptr ? toolTip(*m_obj) : QString();
+    if (m_obj) {
+        const QString tooltip = toolTip(*m_obj);
+        if (tooltip.isEmpty()) {
+            const QString text = m_obj->property("text").toString();
+            Q_ASSERT(!text.isEmpty());
+            return text;
+        }
+        return tooltip;
+    }
+
+    Q_ASSERT(m_description);
+    return m_description ? QString::fromUtf8(m_description) : QString();
 }

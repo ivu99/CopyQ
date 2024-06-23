@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2017, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #ifndef SCRIPTABLEBYTEARRAY_H
 #define SCRIPTABLEBYTEARRAY_H
@@ -23,6 +6,7 @@
 #include <QByteArray>
 #include <QJSValue>
 #include <QObject>
+#include <QVariant>
 
 class ScriptableByteArray final : public QObject
 {
@@ -34,33 +18,34 @@ public:
     Q_INVOKABLE ScriptableByteArray() {}
     Q_INVOKABLE explicit ScriptableByteArray(const QByteArray &bytes);
     Q_INVOKABLE explicit ScriptableByteArray(const QString &text);
+    Q_INVOKABLE explicit ScriptableByteArray(const QVariant &value);
     Q_INVOKABLE explicit ScriptableByteArray(int size);
 
     Q_INVOKABLE ScriptableByteArray(const ScriptableByteArray &other);
 
-    const QByteArray *data() const { return &m_self; }
+    const QByteArray *data() { return &self(); }
 
 public slots:
     void chop(int n);
     bool equals(const QJSValue &other);
-    QJSValue left(int len) const;
-    QJSValue mid(int pos, int len = -1) const;
+    QJSValue left(int len);
+    QJSValue mid(int pos, int len = -1);
     QJSValue remove(int pos, int len);
-    QJSValue right(int len) const;
-    QJSValue simplified() const;
-    QJSValue toBase64() const;
-    QJSValue toLower() const;
-    QJSValue toUpper() const;
-    QJSValue trimmed() const;
+    QJSValue right(int len);
+    QJSValue simplified();
+    QJSValue toBase64();
+    QJSValue toLower();
+    QJSValue toUpper();
+    QJSValue trimmed();
     void truncate(int pos);
-    QJSValue valueOf() const;
+    QJSValue valueOf();
 
-    int size() const;
+    int size();
 
-    QString toString() const;
-    QString toLatin1String() const;
+    QString toString();
+    QString toLatin1String();
 
-    QJSValue length() const;
+    QJSValue length();
     void setLength(QJSValue size);
 
 private:
@@ -68,7 +53,16 @@ private:
 
     QJSValue newByteArray(const QByteArray &bytes) const;
 
+    QByteArray &self();
+
     QByteArray m_self;
+    QVariant m_variant;
 };
+
+const QByteArray *getByteArray(const QJSValue &value);
+
+QByteArray toByteArray(const QJSValue &value);
+
+QString toString(const QJSValue &value);
 
 #endif // SCRIPTABLEBYTEARRAY_H

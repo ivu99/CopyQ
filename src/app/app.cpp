@@ -1,30 +1,13 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "app.h"
 
 #include "common/command.h"
 #include "common/commandstore.h"
-#include "common/config.h"
 #include "common/log.h"
 #include "common/settings.h"
 #include "common/textdata.h"
+#include "item/serialize.h"
 #include "platform/platformnativeinterface.h"
 #ifdef Q_OS_UNIX
 #   include "platform/unix/unixsignalhandler.h"
@@ -34,6 +17,7 @@
 #include <QDir>
 #include <QLibraryInfo>
 #include <QLocale>
+#include <QStandardPaths>
 #include <QTranslator>
 #include <QVariant>
 
@@ -61,7 +45,7 @@ void initTests()
     if ( !isTesting() )
         return;
 
-    const QString session = "copyq.test";
+    const QString session = QStringLiteral("copyq.test");
     QCoreApplication::setOrganizationName(session);
     QCoreApplication::setApplicationName(session);
 
@@ -81,7 +65,7 @@ void installTranslator()
 {
     QString locale = QString::fromUtf8( qgetenv("COPYQ_LOCALE") );
     if (locale.isEmpty()) {
-        locale = QSettings().value("Options/language").toString();
+        locale = QSettings().value(QStringLiteral("Options/language")).toString();
         if (locale.isEmpty())
             locale = QLocale::system().name();
         qputenv("COPYQ_LOCALE", locale.toUtf8());
@@ -97,24 +81,24 @@ void installTranslator()
     translationDirectories.prepend(translationPrefix);
 
     // 1. Qt translations
-    installTranslator("qt_" + locale, translationPrefix);
-    installTranslator("qt_" + locale, QLibraryInfo::location(QLibraryInfo::TranslationsPath));
+    installTranslator(QLatin1String("qt_") + locale, translationPrefix);
+    installTranslator(QLatin1String("qt_") + locale, QLibraryInfo::location(QLibraryInfo::TranslationsPath));
 
     // 2. installed translations
-    installTranslator("copyq_" + locale, translationPrefix);
+    installTranslator(QLatin1String("copyq_") + locale, translationPrefix);
 
     // 3. custom translations
     const QByteArray customPath = qgetenv("COPYQ_TRANSLATION_PREFIX");
     if ( !customPath.isEmpty() ) {
         const QString customDir = QDir::fromNativeSeparators( getTextData(customPath) );
-        installTranslator("copyq_" + locale, customDir);
+        installTranslator(QLatin1String("copyq_") + locale, customDir);
         translationDirectories.prepend(customDir);
     }
 
     // 4. compiled, non-installed translations in debug builds
 #ifdef COPYQ_DEBUG
-    const QString compiledTranslations = QCoreApplication::applicationDirPath() + "/src";
-    installTranslator("copyq_" + locale, compiledTranslations);
+    const QString compiledTranslations = QCoreApplication::applicationDirPath() + QLatin1String("/src");
+    installTranslator(QLatin1String("copyq_") + locale, compiledTranslations);
     translationDirectories.prepend(compiledTranslations);
 #endif
 
@@ -129,49 +113,6 @@ void installTranslator()
     QLocale::setDefault(QLocale(locale));
 }
 
-/// Move commands to separate config file.
-void migrateCommands(const QString &commandConfigPath)
-{
-    Settings oldSettings;
-    const auto oldCommands = loadCommands(oldSettings.settingsData());
-
-    const QString commandConfigPathNew = commandConfigPath + ".new";
-    {
-        Settings newSettings(commandConfigPathNew);
-        saveCommands(oldCommands, newSettings.settingsData());
-    }
-
-    {
-        QSettings newSettings(commandConfigPathNew, QSettings::IniFormat);
-        const auto newCommands = loadCommands(&newSettings);
-        if ( newCommands != oldCommands ) {
-            log( QString("Failed to save commands in new file %1")
-                 .arg(commandConfigPathNew), LogError );
-            return;
-        }
-    }
-
-    if ( !QFile::rename(commandConfigPathNew, commandConfigPath) ) {
-        log( QString("Failed to save commands in new file %1")
-             .arg(commandConfigPath), LogError );
-        return;
-    }
-
-    oldSettings.remove("Commands");
-    oldSettings.remove("Command");
-}
-
-void restoreConfiguration()
-{
-    Settings().restore();
-
-    const QString commandConfigPath = getConfigurationFilePath("-commands.ini");
-    if ( QFile::exists(commandConfigPath) )
-        Settings(commandConfigPath).restore();
-    else
-        migrateCommands(commandConfigPath);
-}
-
 } // namespace
 
 App::App(QCoreApplication *application,
@@ -181,6 +122,8 @@ App::App(QCoreApplication *application,
     , m_started(false)
     , m_closed(false)
 {
+    registerDataFileConverter();
+
     QObject::connect(m_app, &QCoreApplication::aboutToQuit, [this]() { exit(); });
 
 #ifdef Q_OS_UNIX
@@ -207,9 +150,29 @@ App::App(QCoreApplication *application,
     QCoreApplication::setOrganizationName(session);
     QCoreApplication::setApplicationName(session);
 
+    if ( qEnvironmentVariableIsEmpty("COPYQ_ITEM_DATA_PATH") ) {
+        if ( !m_app->property("CopyQ_item_data_path").isValid() ) {
+            m_app->setProperty(
+                "CopyQ_item_data_path",
+                QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+                + QLatin1String("/items"));
+        }
+    } else {
+        m_app->setProperty(
+            "CopyQ_item_data_path",
+#if QT_VERSION >= QT_VERSION_CHECK(5,10,0)
+            qEnvironmentVariable("COPYQ_ITEM_DATA_PATH")
+#else
+            QString::fromLocal8bit(qgetenv("COPYQ_ITEM_DATA_PATH"))
+#endif
+        );
+    }
+
 #ifdef HAS_TESTS
     initTests();
 #endif
+
+    initLogging();
 }
 
 App::~App()
@@ -219,16 +182,9 @@ App::~App()
     delete m_app;
 }
 
-void App::restoreSettings(bool canModifySettings)
+void App::installTranslator()
 {
-    Settings::canModifySettings = canModifySettings;
-
-    platformNativeInterface()->loadSettings();
-
-    if (canModifySettings)
-        restoreConfiguration();
-
-    installTranslator();
+    ::installTranslator();
 }
 
 int App::exec()

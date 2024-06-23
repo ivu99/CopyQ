@@ -2,9 +2,10 @@
 set -e
 
 distros=(
-    bionic
     focal
-    groovy
+    jammy
+    mantic
+    noble
 )
 
 sed -i 's/quilt/native/' 'debian/source/format'

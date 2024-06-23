@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "copyqpasteboardmime.h"
 
@@ -24,6 +7,7 @@
 
 #include <QClipboard>
 #include <QEvent>
+#include <QVariant>
 
 #import <CoreServices/CoreServices.h>
 
@@ -72,12 +56,18 @@ namespace {
 
 }
 
+#if QT_VERSION < QT_VERSION_CHECK(6,0,0)
 QString CopyQPasteboardMime::convertorName()
 {
     return QLatin1String("CopyQ");
 }
+#endif
 
+#if QT_VERSION >= QT_VERSION_CHECK(6,0,0)
+QString CopyQPasteboardMime::utiForMime(const QString &mime) const
+#else
 QString CopyQPasteboardMime::flavorFor(const QString &mime)
+#endif
 {
     if (shouldIgnoreMime(mime)) {
         return QString();
@@ -95,7 +85,11 @@ QString CopyQPasteboardMime::flavorFor(const QString &mime)
     return QString();
 }
 
+#if QT_VERSION >= QT_VERSION_CHECK(6,0,0)
+QString CopyQPasteboardMime::mimeForUti(const QString &uti) const
+#else
 QString CopyQPasteboardMime::mimeFor(QString uti)
+#endif
 {
     if (shouldIgnoreUTI(uti)) {
         return QString();
@@ -114,6 +108,7 @@ QString CopyQPasteboardMime::mimeFor(QString uti)
     return COPYQ_MIME_PREFIX + uti;
 }
 
+#if QT_VERSION < QT_VERSION_CHECK(6,0,0)
 bool CopyQPasteboardMime::canConvert(const QString &mime, QString uti)
 {
     if (uti.isEmpty() || mime.isEmpty())
@@ -137,9 +132,13 @@ bool CopyQPasteboardMime::canConvert(const QString &mime, QString uti)
 
     return (convMime == mime);
 }
+#endif
 
-
+#if QT_VERSION >= QT_VERSION_CHECK(6,0,0)
+QVariant CopyQPasteboardMime::convertToMime(const QString &mime, const QList<QByteArray> &data, const QString &uti) const
+#else
 QVariant CopyQPasteboardMime::convertToMime(const QString &mime, QList<QByteArray> data, QString uti)
+#endif
 {
     if (!canConvert(mime, uti)) {
         return QVariant();
@@ -156,20 +155,23 @@ QVariant CopyQPasteboardMime::convertToMime(const QString &mime, QList<QByteArra
     }
 }
 
-QList<QByteArray> CopyQPasteboardMime::convertFromMime(const QString &mime, QVariant variant,
-                                                          QString uti)
+#if QT_VERSION >= QT_VERSION_CHECK(6,0,0)
+QList<QByteArray> CopyQPasteboardMime::convertFromMime(const QString &mime, const QVariant &data, const QString &uti) const
+#else
+QList<QByteArray> CopyQPasteboardMime::convertFromMime(const QString &mime, QVariant data, QString uti)
+#endif
 {
     if (!canConvert(mime, uti)) {
         return QList<QByteArray>();
     }
 
     QList<QByteArray> ret;
-    if (variant.userType() == QMetaType::QByteArray) {
+    if (data.userType() == QMetaType::QByteArray) {
         // Was a single item
-        ret << variant.toByteArray();
+        ret << data.toByteArray();
     } else {
         // Was a list or null
-        QVariantList inp = variant.toList();
+        QVariantList inp = data.toList();
         foreach(const QVariant &item, inp) {
             ret << item.toByteArray();
         }

@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "app/app.h"
 #include "app/applicationexceptionhandler.h"
@@ -56,7 +39,7 @@ int evaluate(
     setLogLabel("Prompt");
 
     QJSEngine engine;
-    Scriptable scriptable(&engine, nullptr);
+    Scriptable scriptable(&engine, nullptr, nullptr);
 
     QJSValue function = engine.globalObject().property(functionName);
     QJSValueList functionArguments;
@@ -66,11 +49,12 @@ int evaluate(
         functionArguments.append(argument);
 
     const auto result = function.call(functionArguments);
+    const bool hasUncaughtException = result.isError() || scriptable.hasUncaughtException();
 
     const auto output = scriptable.fromString(result.toString());
     if ( !output.isEmpty() && canUseStandardOutput() ) {
         QFile f;
-        if ( scriptable.hasUncaughtException() )
+        if (hasUncaughtException)
             f.open(stderr, QIODevice::WriteOnly);
         else
             f.open(stdout, QIODevice::WriteOnly);
@@ -81,7 +65,7 @@ int evaluate(
         f.close();
     }
 
-    const int exitCode = scriptable.hasUncaughtException() ? CommandException : 0;
+    const int exitCode = hasUncaughtException ? CommandException : 0;
     app.exit(exitCode);
     return exitCode;
 }
@@ -105,8 +89,12 @@ bool isValidSessionName(const QString &sessionName)
 
 QString restoreSessionName(const QString &sessionId)
 {
-    const QSettings settings(QSettings::IniFormat, QSettings::UserScope, "copyq", "copyq_no_session");
-    const auto sessionNameKey = "session_" + sessionId;
+    const QSettings settings(
+        QSettings::IniFormat,
+        QSettings::UserScope,
+        QStringLiteral("copyq"),
+        QStringLiteral("copyq_no_session"));
+    const auto sessionNameKey = QLatin1String("session_") + sessionId;
     const auto sessionName = settings.value(sessionNameKey).toString();
     return sessionName;
 }
@@ -116,13 +104,13 @@ int startServer(int argc, char *argv[], QString sessionName)
     // By default, enable automatic screen scaling in Qt for high-DPI displays
     // (this works better at least in Windows).
     if ( qEnvironmentVariableIsEmpty("QT_AUTO_SCREEN_SCALE_FACTOR") )
-        qputenv("QT_AUTO_SCREEN_SCALE_FACTOR", "1");
+        qputenv("QT_AUTO_SCREEN_SCALE_FACTOR", QByteArrayLiteral("1"));
 
     auto qapp = platformNativeInterface()->createServerApplication(argc, argv);
     if ( qapp->isSessionRestored() ) {
         const auto sessionId = qapp->sessionId();
         sessionName = restoreSessionName(sessionId);
-        COPYQ_LOG( QString("Restoring session ID \"%1\", session name \"%2\"")
+        COPYQ_LOG( QStringLiteral("Restoring session ID \"%1\", session name \"%2\"")
                    .arg(sessionId, sessionName) );
         if ( !sessionName.isEmpty() && !isValidSessionName(sessionName) ) {
             log("Failed to restore session name", LogError);
@@ -138,16 +126,16 @@ void startServerInBackground(const QString &applicationPath, QString sessionName
 {
     const bool couldUseStandardOutput = canUseStandardOutput();
     if (couldUseStandardOutput)
-        qputenv("COPYQ_NO_OUTPUT", "1");
+        qputenv("COPYQ_NO_OUTPUT", QByteArrayLiteral("1"));
 
-    const QStringList arguments{QString::fromLatin1("-s"), sessionName};
+    const QStringList arguments{QStringLiteral("-s"), sessionName};
     const bool started = QProcess::startDetached(applicationPath, arguments);
 
     if (!couldUseStandardOutput)
         qunsetenv("COPYQ_NO_OUTPUT");
 
     if (!started)
-        log( QLatin1String("Failed to start the server"), LogError );
+        log("Failed to start the server", LogError);
 }
 
 int startClient(int argc, char *argv[], const QStringList &arguments, const QString &sessionName)
@@ -158,61 +146,63 @@ int startClient(int argc, char *argv[], const QStringList &arguments, const QStr
 
 bool needsHelp(const QString &arg)
 {
-    return arg == "-h" ||
-           arg == "--help" ||
-           arg == "help";
+    return arg == QLatin1String("-h") ||
+           arg == QLatin1String("--help") ||
+           arg == QLatin1String("help");
 }
 
 bool needsVersion(const QString &arg)
 {
-    return arg == "-v" ||
-           arg == "--version" ||
-           arg == "version";
+    return arg == QLatin1String("-v") ||
+           arg == QLatin1String("--version") ||
+           arg == QLatin1String("version");
 }
 
 bool needsInfo(const QString &arg)
 {
-    return arg == "--info" ||
-           arg == "info";
+    return arg == QLatin1String("--info") ||
+           arg == QLatin1String("info");
 }
 
 bool needsLogs(const QString &arg)
 {
-    return arg == "--logs" ||
-           arg == "logs";
+    return arg == QLatin1String("--logs") ||
+           arg == QLatin1String("logs");
 }
 
 bool needsStartServer(const QString &arg)
 {
-    return arg == "--start-server";
+    return arg == QLatin1String("--start-server");
 }
 
 #ifdef HAS_TESTS
 bool needsTests(const QString &arg)
 {
-    return arg == "--tests" ||
-           arg == "tests";
+    return arg == QLatin1String("--tests") ||
+           arg == QLatin1String("tests");
 }
 #endif
 
 QString getSessionName(const QStringList &arguments, int *skipArguments)
 {
-    const QString firstArgument = arguments.value(0);
-    *skipArguments = 0;
+    if (arguments.size() > 0) {
+        if ( arguments[0] == QLatin1String("-s")
+          || arguments[0] == QLatin1String("--session")
+          || arguments[0] == QLatin1String("session") )
+        {
+            *skipArguments = 2;
+            return arguments.value(1);
+        }
 
-    if (firstArgument == "-s" || firstArgument == "--session" || firstArgument == "session") {
-        *skipArguments = 2;
-        return arguments.value(1);
+        if ( arguments[0].startsWith(QLatin1String("--session=")) ) {
+            *skipArguments = 1;
+            return arguments[0].mid( arguments[0].indexOf('=') + 1 );
+        }
+
+        // Skip session arguments passed from session manager.
+        if (arguments.size() == 2 && arguments[0] == QLatin1String("-session"))
+            *skipArguments = 2;
     }
-
-    if ( firstArgument.startsWith("--session=") ) {
-        *skipArguments = 1;
-        return firstArgument.mid( firstArgument.indexOf('=') + 1 );
-    }
-
-    // Skip session arguments passed from session manager.
-    if (arguments.size() == 2 && firstArgument == "-session")
-        *skipArguments = 2;
 
     return getTextData( qgetenv("COPYQ_SESSION_NAME") );
 }
@@ -223,14 +213,14 @@ int startApplication(int argc, char **argv)
 
 #ifdef Q_OS_UNIX
     if ( !initUnixSignalHandler() )
-        log( QString("Failed to create handler for Unix signals!"), LogError );
+        log("Failed to create handler for Unix signals!", LogError);
 #endif
 
     const QStringList arguments =
             platformNativeInterface()->getCommandLineArguments(argc, argv);
 
     // Get session name (default is empty).
-    int skipArguments;
+    int skipArguments = 0;
     const QString sessionName = getSessionName(arguments, &skipArguments);
 
     if ( !isValidSessionName(sessionName) ) {
@@ -250,16 +240,16 @@ int startApplication(int argc, char **argv)
         }
 
         if ( needsVersion(arg) )
-            return evaluate( "version", QStringList(), argc, argv, sessionName );
+            return evaluate( QStringLiteral("version"), QStringList(), argc, argv, sessionName );
 
         if ( needsHelp(arg) )
-            return evaluate( "help", arguments.mid(skipArguments + 1), argc, argv, sessionName );
+            return evaluate( QStringLiteral("help"), arguments.mid(skipArguments + 1), argc, argv, sessionName );
 
         if ( needsInfo(arg) )
-            return evaluate( "info", arguments.mid(skipArguments + 1), argc, argv, sessionName );
+            return evaluate( QStringLiteral("info"), arguments.mid(skipArguments + 1), argc, argv, sessionName );
 
         if ( needsLogs(arg) )
-            return evaluate( "logs", arguments.mid(skipArguments + 1), argc, argv, sessionName );
+            return evaluate( QStringLiteral("logs"), arguments.mid(skipArguments + 1), argc, argv, sessionName );
 
 #ifdef HAS_TESTS
         if ( needsTests(arg) ) {

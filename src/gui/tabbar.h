@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #ifndef TABBAR_H
 #define TABBAR_H
@@ -45,16 +28,16 @@ public:
 
     void setTabItemCount(const QString &tabName, const QString &itemCount) override;
 
-    void updateTabIcon(const QString &tabName) override;
+    void setTabIcon(int index, const QString &icon);
+    void setTabIcon(const QString &tabName, const QString &icon) override;
 
     void insertTab(int index, const QString &tabName) override;
     void removeTab(int index) override;
-    void moveTab(int from, int to) override;
 
-    void updateCollapsedTabs(QStringList *) const override {}
-    void setCollapsedTabs(const QStringList &) override {}
+    void updateCollapsedTabs(QList<QString> *) const override {}
+    void setCollapsedTabs(const QList<QString> &) override {}
 
-    void updateTabIcons() override;
+    void updateTabIcons(const QHash<QString, QString> &tabIcons) override;
 
     void nextTab() override;
     void previousTab() override;

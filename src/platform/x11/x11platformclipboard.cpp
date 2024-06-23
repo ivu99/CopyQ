@@ -1,39 +1,27 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <QApplication>
 
 #include "x11platformclipboard.h"
+
+#include "x11info.h"
 
 #include "common/common.h"
 #include "common/mimetypes.h"
 #include "common/log.h"
 #include "common/timer.h"
 
-#include "systemclipboard/systemclipboard.h"
+#include "systemclipboard/waylandclipboard.h"
 
-#include <X11/Xlib.h>
-#include <X11/Xatom.h>
+#include <QDataStream>
+
+#ifdef COPYQ_WITH_X11
+#   include <X11/Xlib.h>
+#   include <X11/Xatom.h>
+#endif
 
 #include <QClipboard>
 #include <QMimeData>
-#include <QX11Info>
 
 namespace {
 
@@ -44,20 +32,26 @@ constexpr auto maxRetryCount = 3;
 /// Return true only if selection is incomplete, i.e. mouse button or shift key is pressed.
 bool isSelectionIncomplete()
 {
-    if (!QX11Info::isPlatformX11())
+#ifdef COPYQ_WITH_X11
+    if (!X11Info::isPlatformX11())
         return false;
 
-    auto display = QX11Info::display();
+    auto display = X11Info::display();
+    if (!display)
+        return false;
 
     // If mouse button or shift is pressed then assume that user is selecting text.
-    XEvent event{};
+    XButtonEvent event{};
     XQueryPointer(display, DefaultRootWindow(display),
-                  &event.xbutton.root, &event.xbutton.window,
-                  &event.xbutton.x_root, &event.xbutton.y_root,
-                  &event.xbutton.x, &event.xbutton.y,
-                  &event.xbutton.state);
+                  &event.root, &event.window,
+                  &event.x_root, &event.y_root,
+                  &event.x, &event.y,
+                  &event.state);
 
-    return event.xbutton.state & (Button1Mask | ShiftMask);
+    return event.state & (Button1Mask | ShiftMask);
+#else
+    return true;
+#endif
 }
 
 } // namespace
@@ -68,36 +62,50 @@ X11PlatformClipboard::X11PlatformClipboard()
     m_selectionData.mode = ClipboardMode::Selection;
 
     // Create Wayland clipboard instance so it can start receiving new data.
-    if ( !QX11Info::isPlatformX11() )
-        SystemClipboard::instance();
+    if ( !X11Info::isPlatformX11() ) {
+        m_selectionSupported = WaylandClipboard::instance()->isSelectionSupported();
+    }
 }
 
 void X11PlatformClipboard::startMonitoring(const QStringList &formats)
 {
     m_clipboardData.formats = formats;
 
-    // Always assume that only plain text can be in primary selection buffer.
-    // Asking a app for bigger data when mouse selection changes can make the app hang for a moment.
+    // Avoid asking apps for bigger data when mouse selection changes.
+    // This could make the app hang for a moment.
     m_selectionData.formats.append(mimeText);
+    m_selectionData.formats.append(mimeTextUtf8);
+    for (auto &format : formats) {
+        if (!format.startsWith(QLatin1String("image/")) && !format.startsWith(QLatin1String("text/")))
+            m_selectionData.formats.append(format);
+    }
 
     if ( m_selectionData.enabled && !QGuiApplication::clipboard()->supportsSelection() ) {
         log("X11 selection is not supported, disabling.");
         m_selectionData.enabled = false;
     }
 
-    if ( !QX11Info::isPlatformX11() ) {
-        auto clipboard = SystemClipboard::instance();
-        if (clipboard != nullptr) {
-            connect(clipboard, &SystemClipboard::changed,
-                    this, [this](QClipboard::Mode mode){ onClipboardChanged(mode); });
-        }
+    if ( !X11Info::isPlatformX11() ) {
+        connect(WaylandClipboard::instance(), &WaylandClipboard::changed,
+                this, [this](QClipboard::Mode mode){ onClipboardChanged(mode); });
     }
+
+    // Ignore the initial clipboard content since
+    // it won't have the correct owner's window title.
+    m_clipboardData.ignoreNext = true;
+    m_selectionData.ignoreNext = true;
+    QTimer::singleShot(5000, this, [this](){
+        m_clipboardData.ignoreNext = false;
+        m_selectionData.ignoreNext = false;
+    });
 
     for (auto clipboardData : {&m_clipboardData, &m_selectionData}) {
         clipboardData->owner.clear();
         clipboardData->newOwner.clear();
-        updateClipboardData(clipboardData);
-        useNewClipboardData(clipboardData);
+        if ( X11Info::isPlatformX11() ) {
+            updateClipboardData(clipboardData);
+            useNewClipboardData(clipboardData);
+        }
     }
 
     initSingleShotTimer( &m_timerCheckAgain, 0, this, &X11PlatformClipboard::check );
@@ -110,9 +118,9 @@ void X11PlatformClipboard::startMonitoring(const QStringList &formats)
         useNewClipboardData(&m_selectionData);
     } );
 
-    DummyClipboard::startMonitoring(formats);
-
     m_monitoring = true;
+
+    DummyClipboard::startMonitoring(formats);
 }
 
 void X11PlatformClipboard::setMonitoringEnabled(ClipboardMode mode, bool enable)
@@ -130,42 +138,33 @@ QVariantMap X11PlatformClipboard::data(ClipboardMode mode, const QStringList &fo
 
     auto data = clipboardData.data;
     if ( !data.contains(mimeOwner) )
-        data[mimeWindowTitle] = clipboardData.owner;
+        data[mimeWindowTitle] = clipboardData.owner.toUtf8();
     return data;
 }
 
 void X11PlatformClipboard::setData(ClipboardMode mode, const QVariantMap &dataMap)
 {
-    if ( QX11Info::isPlatformX11() ) {
+    if ( X11Info::isPlatformX11() ) {
         // WORKAROUND: Avoid getting X11 warning "QXcbClipboard: SelectionRequest too old".
         QCoreApplication::processEvents();
         DummyClipboard::setData(mode, dataMap);
     } else {
-        auto clipboard = SystemClipboard::instance();
-        if (clipboard != nullptr)
-            clipboard->setMimeData( createMimeData(dataMap), modeToQClipboardMode(mode) );
+        const auto data = createMimeData(dataMap);
+        const auto qmode = modeToQClipboardMode(mode);
+        WaylandClipboard::instance()->setMimeData(data, qmode);
+
+        // This makes pasting the clipboard work in own widgets.
+        const auto data2 = createMimeData(dataMap);
+        QGuiApplication::clipboard()->setMimeData(data2, qmode);
     }
 }
 
-const QMimeData *X11PlatformClipboard::mimeData(ClipboardMode mode) const
+const QMimeData *X11PlatformClipboard::rawMimeData(ClipboardMode mode) const
 {
-    if ( QX11Info::isPlatformX11() )
-        return DummyClipboard::mimeData(mode);
+    if ( X11Info::isPlatformX11() )
+        return DummyClipboard::rawMimeData(mode);
 
-    // Avoid deadlock by providing own clipboard using Qt
-    // and not using pipes in WaylandClipboard.
-    if ( mode == ClipboardMode::Clipboard
-         ? QGuiApplication::clipboard()->ownsClipboard()
-         : QGuiApplication::clipboard()->ownsSelection() )
-    {
-        return DummyClipboard::mimeData(mode);
-    }
-
-    auto clipboard = SystemClipboard::instance();
-    if (clipboard == nullptr)
-        return nullptr;
-
-    return clipboard->mimeData( modeToQClipboardMode(mode) );
+    return WaylandClipboard::instance()->mimeData( modeToQClipboardMode(mode) );
 }
 
 void X11PlatformClipboard::onChanged(int mode)
@@ -177,15 +176,7 @@ void X11PlatformClipboard::onChanged(int mode)
     // Store the current window title right after the clipboard/selection changes.
     // This makes sure that the title points to the correct clipboard/selection
     // owner most of the times.
-    const auto currentWindowTitle = clipboardOwner();
-    if (currentWindowTitle != clipboardData.newOwner) {
-        COPYQ_LOG( QString("New %1 owner: \"%2\"")
-                   .arg(
-                       QString::fromLatin1(mode == QClipboard::Clipboard ? "clipboard" : "selection"),
-                       QString::fromUtf8(currentWindowTitle)
-                   ) );
-        clipboardData.newOwner = currentWindowTitle;
-    }
+    clipboardData.newOwner = m_clipboardOwner;
 
     if (mode == QClipboard::Selection) {
         // Omit checking selection too fast.
@@ -258,10 +249,11 @@ void X11PlatformClipboard::updateClipboardData(X11PlatformClipboard::ClipboardDa
 
     // Retry to retrieve clipboard data few times.
     if (!data) {
-        if ( !QX11Info::isPlatformX11() ) {
-            COPYQ_LOG("No Wayland clipboard data received yet.");
+        if ( !X11Info::isPlatformX11() )
             return;
-        }
+
+        if ( rawMimeData(clipboardData->mode) )
+            return;
 
         if (clipboardData->retry < maxRetryCount) {
             ++clipboardData->retry;
@@ -277,7 +269,12 @@ void X11PlatformClipboard::updateClipboardData(X11PlatformClipboard::ClipboardDa
     }
     clipboardData->retry = 0;
 
-    const QByteArray newDataTimestampData = data->data(QLatin1String("TIMESTAMP"));
+    // Ignore clipboard with secrets
+    const QByteArray passwordManagerHint = data->data(QStringLiteral("x-kde-passwordManagerHint"));
+    if ( passwordManagerHint == QByteArrayLiteral("secret") )
+        return;
+
+    const QByteArray newDataTimestampData = data->data(QStringLiteral("TIMESTAMP"));
     quint32 newDataTimestamp = 0;
     if ( !newDataTimestampData.isEmpty() ) {
         QDataStream stream(newDataTimestampData);
@@ -287,9 +284,13 @@ void X11PlatformClipboard::updateClipboardData(X11PlatformClipboard::ClipboardDa
             newDataTimestamp = 0;
     }
 
-    // In case there is a timestamp, omit update if it did not change.
-    if ( newDataTimestamp != 0 && clipboardData->newDataTimestamp == newDataTimestamp )
-        return;
+    // In case there is a valid timestamp, omit update if the timestamp and
+    // text did not change.
+    if ( newDataTimestamp != 0 && clipboardData->newDataTimestamp == newDataTimestamp ) {
+        const QVariantMap newData = cloneData(*data, {mimeText});
+        if (newData.value(mimeText) == clipboardData->newData.value(mimeText))
+            return;
+    }
 
     clipboardData->timerEmitChange.stop();
     clipboardData->abortCloning = false;
@@ -302,8 +303,8 @@ void X11PlatformClipboard::updateClipboardData(X11PlatformClipboard::ClipboardDa
         return;
     }
 
-    // In case there is no timestamp, update only if the data changed.
-    if ( newDataTimestamp == 0 && clipboardData->data == clipboardData->newData )
+    // Update only if the data changed.
+    if ( clipboardData->data == clipboardData->newData )
         return;
 
     clipboardData->newDataTimestamp = newDataTimestamp;
@@ -315,7 +316,10 @@ void X11PlatformClipboard::useNewClipboardData(X11PlatformClipboard::ClipboardDa
     clipboardData->data = clipboardData->newData;
     clipboardData->owner = clipboardData->newOwner;
     clipboardData->timerEmitChange.stop();
-    emit changed(clipboardData->mode);
+    if (clipboardData->ignoreNext)
+        clipboardData->ignoreNext = false;
+    else
+        emit changed(clipboardData->mode);
 }
 
 void X11PlatformClipboard::checkAgainLater(bool clipboardChanged, int interval)

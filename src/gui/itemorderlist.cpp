@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "gui/itemorderlist.h"
 #include "ui_itemorderlist.h"
@@ -37,6 +20,16 @@ void deleteWidget(const QPointer<QWidget> &object)
         object->deleteLater();
 }
 
+void setItemId(QListWidgetItem *item, int id)
+{
+    item->setData(Qt::UserRole, id);
+}
+
+int itemId(QListWidgetItem *item)
+{
+    return item->data(Qt::UserRole).toInt();
+}
+
 } // namespace
 
 ItemOrderList::ItemOrderList(QWidget *parent)
@@ -49,6 +42,10 @@ ItemOrderList::ItemOrderList(QWidget *parent)
             this, &ItemOrderList::onPushButtonUpClicked);
     connect(ui->pushButtonDown, &QToolButton::clicked,
             this, &ItemOrderList::onPushButtonDownClicked);
+    connect(ui->pushButtonTop, &QToolButton::clicked,
+            this, &ItemOrderList::onPushButtonTopClicked);
+    connect(ui->pushButtonBottom, &QToolButton::clicked,
+            this, &ItemOrderList::onPushButtonBottomClicked);
     connect(ui->pushButtonRemove, &QToolButton::clicked,
             this, &ItemOrderList::onPushButtonRemoveClicked);
     connect(ui->pushButtonAdd, &QToolButton::clicked,
@@ -90,6 +87,8 @@ void ItemOrderList::setItemsMovable(bool movable)
 {
     ui->pushButtonUp->setVisible(movable);
     ui->pushButtonDown->setVisible(movable);
+    ui->pushButtonTop->setVisible(movable);
+    ui->pushButtonBottom->setVisible(movable);
     ui->listWidgetItems->setDragEnabled(movable);
 }
 
@@ -97,7 +96,7 @@ void ItemOrderList::clearItems()
 {
     ui->listWidgetItems->clear();
     for (const auto &pair : m_items)
-        deleteWidget(pair.widget);
+        deleteWidget(pair.second.widget);
     m_items.clear();
 }
 
@@ -116,7 +115,10 @@ void ItemOrderList::insertItem(
     auto listItem = new QListWidgetItem(icon, label);
     if (state != NotCheckable)
         listItem->setCheckState(state == Checked ? Qt::Checked : Qt::Unchecked);
-    m_items[listItem] = ItemWidgetPair(item, state == Checked);
+
+    ++m_lastItemId;
+    setItemId(listItem, m_lastItemId);
+    m_items.insert({m_lastItemId, ItemWidgetPair(item, state == Checked)});
 
     const int row = targetRow >= 0 ? qMin(list->count(), targetRow) : list->count();
     list->insertItem(row, listItem);
@@ -133,12 +135,16 @@ void ItemOrderList::removeRow(int row)
 
 QWidget *ItemOrderList::widget(int row) const
 {
-    return m_items[listItem(row)].widget;
+    const int id = itemId(listItem(row));
+    Q_ASSERT(m_items.find(id) != m_items.end());
+    return m_items.at(id).widget;
 }
 
 QVariant ItemOrderList::data(int row) const
 {
-    return m_items[listItem(row)].item->data();
+    const int id = itemId(listItem(row));
+    Q_ASSERT(m_items.find(id) != m_items.end());
+    return m_items.at(id).item->data();
 }
 
 int ItemOrderList::itemCount() const
@@ -285,6 +291,8 @@ void ItemOrderList::showEvent(QShowEvent *event)
         ui->pushButtonRemove->setIcon( getIcon("list-remove", IconMinus) );
         ui->pushButtonDown->setIcon( getIcon("go-down", IconArrowDown) );
         ui->pushButtonUp->setIcon( getIcon("go-up", IconArrowUp) );
+        ui->pushButtonTop->setIcon( getIcon("go-top", IconAnglesUp) );
+        ui->pushButtonBottom->setIcon( getIcon("go-bottom", IconAnglesDown) );
     }
 
     // Resize list to minimal size.
@@ -311,28 +319,32 @@ void ItemOrderList::nextPreviousItem(int d)
 
 void ItemOrderList::onPushButtonUpClicked()
 {
-    QListWidget *list = ui->listWidgetItems;
-    const int row = list->currentRow();
-    if (row < 1)
-        return;
-
-    list->blockSignals(true);
-    list->insertItem(row - 1, list->takeItem(row));
-    list->setCurrentRow(row - 1);
-    list->blockSignals(false);
+    const int row = ui->listWidgetItems->currentRow();
+    if (row >= 1)
+        moveTab(row, row - 1);
 }
 
 void ItemOrderList::onPushButtonDownClicked()
 {
     QListWidget *list = ui->listWidgetItems;
     const int row = list->currentRow();
-    if (row < 0 || row == list->count() - 1)
-        return;
+    if (row >= 0 && row + 1 < list->count())
+        moveTab(row, row + 1);
+}
 
-    list->blockSignals(true);
-    list->insertItem(row + 1, list->takeItem(row));
-    list->setCurrentRow(row + 1);
-    list->blockSignals(false);
+void ItemOrderList::onPushButtonTopClicked()
+{
+    const int row = ui->listWidgetItems->currentRow();
+    if (row >= 1)
+        moveTab(row, 0);
+}
+
+void ItemOrderList::onPushButtonBottomClicked()
+{
+    QListWidget *list = ui->listWidgetItems;
+    const int row = ui->listWidgetItems->currentRow();
+    if (row >= 0 && row + 1 < list->count())
+        moveTab(row, list->count() - 1);
 }
 
 void ItemOrderList::onPushButtonRemoveClicked()
@@ -360,13 +372,28 @@ void ItemOrderList::onListWidgetItemsItemSelectionChanged()
 
 void ItemOrderList::onListWidgetItemsItemChanged(QListWidgetItem *item)
 {
-    const auto row = ui->listWidgetItems->row(item);
-    const bool checked = isItemChecked(row);
+    const int id = itemId(item);
+    if (id == 0)
+        return;
 
-    if ( m_items[item].lastCheckedState != checked ) {
-        m_items[item].lastCheckedState = checked;
+    const auto row = ui->listWidgetItems->row(item);
+    const bool checked = item->checkState() == Qt::Checked;
+
+    Q_ASSERT(m_items.find(id) != m_items.end());
+    ItemWidgetPair &pair = m_items.at(id);
+    if ( pair.lastCheckedState != checked ) {
+        pair.lastCheckedState = checked;
         emit itemCheckStateChanged(row, checked);
     }
+}
+
+void ItemOrderList::moveTab(int row, int targetRow)
+{
+    QListWidget *list = ui->listWidgetItems;
+    list->blockSignals(true);
+    list->insertItem(targetRow, list->takeItem(row));
+    list->setCurrentRow(targetRow);
+    list->blockSignals(false);
 }
 
 QListWidgetItem *ItemOrderList::listItem(int row) const
@@ -391,7 +418,9 @@ void ItemOrderList::setCurrentItemWidget(QWidget *widget)
 
 QWidget *ItemOrderList::createWidget(QListWidgetItem *item)
 {
-    ItemWidgetPair &pair = m_items[item];
+    const int id = itemId(item);
+    Q_ASSERT(m_items.find(id) != m_items.end());
+    ItemWidgetPair &pair = m_items.at(id);
     if (!pair.widget)
         pair.widget = pair.item->createWidget(this);
     return pair.widget;
@@ -399,7 +428,10 @@ QWidget *ItemOrderList::createWidget(QListWidgetItem *item)
 
 void ItemOrderList::removeItem(QListWidgetItem *item)
 {
-    ItemWidgetPair pair = m_items.take(item);
+    const int id = itemId(item);
+    Q_ASSERT(m_items.find(id) != m_items.end());
+    ItemWidgetPair pair = m_items.at(id);
+    m_items.erase(id);
     deleteWidget(pair.widget);
     delete item;
 }

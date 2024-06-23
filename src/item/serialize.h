@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #ifndef SERIALIZE_H
 #define SERIALIZE_H
@@ -27,14 +10,22 @@ class QByteArray;
 class QDataStream;
 class QIODevice;
 
-void serializeData(QDataStream *stream, const QVariantMap &data);
+class DataFile;
+QDataStream &operator<<(QDataStream &out, DataFile value);
+QDataStream &operator>>(QDataStream &in, DataFile &value);
+void registerDataFileConverter();
+
+void serializeData(QDataStream *stream, const QVariantMap &data, int itemDataThreshold = -1);
 bool deserializeData(QDataStream *stream, QVariantMap *data);
 QByteArray serializeData(const QVariantMap &data);
 bool deserializeData(QVariantMap *data, const QByteArray &bytes);
 
-bool serializeData(const QAbstractItemModel &model, QDataStream *stream);
+bool serializeData(const QAbstractItemModel &model, QDataStream *stream, int itemDataThreshold = -1);
 bool deserializeData(QAbstractItemModel *model, QDataStream *stream, int maxItems);
-bool serializeData(const QAbstractItemModel &model, QIODevice *file);
+bool serializeData(const QAbstractItemModel &model, QIODevice *file, int itemDataThreshold = -1);
 bool deserializeData(QAbstractItemModel *model, QIODevice *file, int maxItems);
+
+QString itemDataPath();
+bool itemDataFiles(QIODevice *file, QStringList *files);
 
 #endif // SERIALIZE_H

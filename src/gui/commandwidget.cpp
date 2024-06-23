@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "commandwidget.h"
 #include "ui_commandwidget.h"
@@ -39,9 +22,11 @@ namespace {
 
 const QIcon iconClipboard() { return getIcon("", IconClipboard); }
 const QIcon iconMenu() { return getIcon("", IconBars); }
-const QIcon iconShortcut() { return getIcon("", IconKeyboard); }
-const QIcon iconScript() { return getIcon("", IconCog); }
+const QIcon iconScript() { return getIcon("", IconGear); }
 const QIcon iconDisplay() { return getIcon("", IconEye); }
+#ifdef COPYQ_GLOBAL_SHORTCUTS
+const QIcon iconShortcut() { return getIcon("", IconKeyboard); }
+#endif
 
 QStringList serializeShortcuts(const QList<QKeySequence> &shortcuts)
 {
@@ -108,11 +93,11 @@ CommandWidget::CommandWidget(QWidget *parent)
 
     updateWidgets();
 
-#ifdef NO_GLOBAL_SHORTCUTS
+#ifdef COPYQ_GLOBAL_SHORTCUTS
+    ui->toolButtonGlobalShortcut->setIcon(iconShortcut());
+#else
     ui->toolButtonGlobalShortcut->hide();
     ui->shortcutButtonGlobalShortcut->hide();
-#else
-    ui->toolButtonGlobalShortcut->setIcon(iconShortcut());
 #endif
 
     ui->toolButtonAutomatic->setIcon(iconClipboard());
@@ -159,12 +144,19 @@ Command CommandWidget::command() const
     c.globalShortcuts = serializeShortcuts( ui->shortcutButtonGlobalShortcut->shortcuts() );
     c.tab    = ui->comboBoxCopyToTab->currentText();
     c.outputTab = ui->comboBoxOutputTab->currentText();
+    c.internalId = m_internalId;
 
     return c;
 }
 
 void CommandWidget::setCommand(const Command &c)
 {
+    m_internalId = c.internalId;
+    const bool isEditable = !m_internalId.startsWith(QLatin1String("copyq_"));
+
+    ui->scrollAreaWidgetContents->setEnabled(isEditable);
+    ui->commandEdit->setReadOnly(!isEditable);
+    ui->lineEditName->setReadOnly(!isEditable);
     ui->lineEditName->setText(c.name);
     ui->lineEditMatch->setText( c.re.pattern() );
     ui->lineEditWindow->setText( c.wndre.pattern() );
@@ -261,6 +253,7 @@ void CommandWidget::updateWidgets()
 
 void CommandWidget::updateShowAdvanced()
 {
+    ui->widgetCommandType->setVisible(m_showAdvanced);
     ui->tabWidget->setVisible(m_showAdvanced);
     ui->labelDescription->setVisible(m_showAdvanced);
 

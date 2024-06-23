@@ -1,27 +1,9 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "tabtree.h"
 
 #include "common/common.h"
 #include "common/display.h"
-#include "common/mimetypes.h"
 #include "common/timer.h"
 #include "gui/iconfactory.h"
 #include "gui/iconfont.h"
@@ -145,7 +127,8 @@ int itemLabelPadding()
 QLabel *createLabel(const QString &objectName, QWidget *parent)
 {
     QLabel *label = new QLabel(parent);
-    label->setMargin(itemLabelPadding());
+    const int p = itemLabelPadding();
+    label->setContentsMargins({p,p,p,p});
     label->setObjectName(objectName);
 
     return label;
@@ -164,8 +147,9 @@ public:
         m_label->installEventFilter(this);
 
         m_layout->addWidget(m_label);
-        m_layout->setMargin(0);
+        m_layout->setContentsMargins({});
         m_layout->addStretch(1);
+        m_layout->setSizeConstraint(QLayout::SetMinimumSize);
 
         updateFromItem(item);
     }
@@ -239,7 +223,7 @@ void labelItem(QTreeWidgetItem *item)
     QTreeWidget *parent = item->treeWidget();
     label = new ItemLabel(item);
     label->installEventFilter(parent);
-    item->setTextAlignment(0, Qt::AlignCenter);
+    item->setTextAlignment(0, Qt::AlignLeft);
     parent->setItemWidget(item, 0, label);
 
     setItemWidgetSelected(item);
@@ -270,6 +254,8 @@ TabTree::TabTree(QWidget *parent)
 
     const int x = smallIconSize();
     setIconSize(QSize(x, x));
+
+    setRootIsDecorated(false);
 
     setMinimumHeight(fontMetrics().lineSpacing() * 3);
     verticalScrollBar()->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Ignored);
@@ -342,16 +328,18 @@ void TabTree::setTabItemCount(const QString &tabName, const QString &itemCount)
     updateSize();
 }
 
-void TabTree::updateTabIcon(const QString &tabName)
+void TabTree::setTabIcon(QTreeWidgetItem *item, const QString &icon)
 {
-    QTreeWidgetItem *item = findTreeItem(tabName);
-    if (!item)
-        return;
-
-    const QIcon icon = getIconForTabName(tabName);
-    item->setIcon(0, icon);
+    item->setIcon(0, icon.isEmpty() ? QIcon() : iconFromFile(icon));
     updateItemSize(item);
     updateSize();
+}
+
+void TabTree::setTabIcon(const QString &tabName, const QString &icon)
+{
+    QTreeWidgetItem *item = findTreeItem(tabName);
+    if (item)
+        setTabIcon(item, icon);
 }
 
 void TabTree::insertTab(int index, const QString &path)
@@ -390,9 +378,6 @@ void TabTree::insertTab(int index, const QString &path)
         item->setExpanded(true);
         item->setData(0, DataText, text);
 
-        const QIcon icon = getIconForTabName( getTabPath(item) );
-        item->setIcon(0, icon);
-
         labelItem(item);
     }
 
@@ -418,20 +403,7 @@ void TabTree::removeTab(int index)
     updateSize();
 }
 
-void TabTree::moveTab(int from, int to)
-{
-    if (from == to)
-        return;
-
-    QTreeWidgetItem *item = findTreeItem(from);
-    if (item == nullptr)
-        return;
-
-    m_tabs.removeOne(item);
-    m_tabs.insert(to, item);
-}
-
-void TabTree::updateCollapsedTabs(QStringList *tabs) const
+void TabTree::updateCollapsedTabs(QList<QString> *tabs) const
 {
     tabs->clear();
     for ( QTreeWidgetItemIterator it(topLevelItem(0)); *it; ++it ) {
@@ -441,7 +413,7 @@ void TabTree::updateCollapsedTabs(QStringList *tabs) const
     }
 }
 
-void TabTree::setCollapsedTabs(const QStringList &collapsedPaths)
+void TabTree::setCollapsedTabs(const QList<QString> &collapsedPaths)
 {
     for (const auto &path : collapsedPaths) {
         QTreeWidgetItem *item = findTreeItem(path);
@@ -450,10 +422,13 @@ void TabTree::setCollapsedTabs(const QStringList &collapsedPaths)
     }
 }
 
-void TabTree::updateTabIcons()
+void TabTree::updateTabIcons(const QHash<QString, QString> &tabIcons)
 {
-    for ( QTreeWidgetItemIterator it(topLevelItem(0)); *it; ++it )
-        updateTabIcon( getTabPath(*it) );
+    for ( QTreeWidgetItemIterator it(topLevelItem(0)); *it; ++it ) {
+        const QString name = getTabPath(*it);
+        const QString icon = tabIcons.value(name);
+        setTabIcon(*it, icon);
+    }
 }
 
 void TabTree::nextTab()
@@ -701,8 +676,6 @@ void TabTree::doUpdateSize()
 
     resizeColumnToContents(0);
     w += sizeHintForColumn(0);
-    resizeColumnToContents(1);
-    w += sizeHintForColumn(1);
 
     setFixedWidth(w);
 }

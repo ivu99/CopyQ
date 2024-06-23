@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
@@ -29,11 +12,10 @@
 #include "platform/platformnativeinterface.h"
 
 #include <QMainWindow>
-#include <QModelIndex>
+#include <QPersistentModelIndex>
 #include <QPointer>
-#include <QSystemTrayIcon>
 #include <QTimer>
-#include <QVector>
+#include <QtContainerFwd>
 
 class Action;
 class ActionDialog;
@@ -46,15 +28,23 @@ class ConfigurationManager;
 class Notification;
 class QAction;
 class QMimeData;
+class SystemTrayIcon;
 class Tabs;
 class Theme;
 class TrayMenu;
 class ToolBar;
+class QModelIndex;
 struct MainWindowOptions;
 struct NotificationButton;
 
 Q_DECLARE_METATYPE(QPersistentModelIndex)
+
+#if QT_VERSION >= QT_VERSION_CHECK(6,0,0)
+using NativeEventResult = qintptr;
+#else
 Q_DECLARE_METATYPE(QList<QPersistentModelIndex>)
+using NativeEventResult = long;
+#endif
 
 namespace Ui
 {
@@ -86,6 +76,7 @@ struct MainWindowOptions {
     bool trayCurrentTab = false;
     QString trayTabName;
     int trayItems = 5;
+    bool nativeTrayMenu = false;
     bool trayImages = true;
     bool trayMenuOpenOnLeftClick = false;
     int transparency = 0;
@@ -255,7 +246,8 @@ public:
     QStringList tabs() const;
 
     /// Used by config() command.
-    QVariant config(const QStringList &nameValue);
+    QVariant config(const QVariantList &nameValue);
+    QString configDescription();
 
     QVariantMap actionData(int id) const;
     void setActionData(int id, const QVariantMap &data);
@@ -288,7 +280,7 @@ public:
     void exit();
 
     /** Load settings. */
-    void loadSettings(QSettings &settings, AppConfig &appConfig);
+    void loadSettings(QSettings &settings, AppConfig *appConfig);
 
     void loadTheme(const QSettings &themeSettings);
 
@@ -419,6 +411,9 @@ public:
     void setItemPreviewVisible(bool visible);
     bool isItemPreviewVisible() const;
 
+    void setScriptOverrides(const QVector<int> &overrides, int actionId);
+    bool isScriptOverridden(int id) const;
+
 signals:
     /** Request clipboard change. */
     void changeClipboard(const QVariantMap &data, ClipboardMode mode);
@@ -429,7 +424,7 @@ signals:
 
     void commandsSaved(const QVector<Command> &commands);
 
-    void configurationChanged();
+    void configurationChanged(AppConfig *appConfig);
 
     void disableClipboardStoringRequest(bool disable);
 
@@ -445,20 +440,22 @@ protected:
 
     bool focusNextPrevChild(bool next) override;
 
-    bool nativeEvent(const QByteArray &eventType, void *message, long *result) override;
+    bool nativeEvent(
+        const QByteArray &eventType, void *message, NativeEventResult *result) override;
 
 private:
     ClipboardBrowserPlaceholder *getPlaceholderForMenu();
     ClipboardBrowserPlaceholder *getPlaceholderForTrayMenu();
     void filterMenuItems(const QString &searchText);
     void filterTrayMenuItems(const QString &searchText);
-    void trayActivated(QSystemTrayIcon::ActivationReason reason);
+    void trayActivated(int reason);
     void onMenuActionTriggered(const QVariantMap &data, bool omitPaste);
     void onTrayActionTriggered(const QVariantMap &data, bool omitPaste);
     void findNextOrPrevious();
     void tabChanged(int current, int previous);
     void saveTabPositions();
-    void doSaveTabPositions();
+    void onSaveTabPositionsTimer();
+    void doSaveTabPositions(AppConfig *appConfig);
     void tabsMoved(const QString &oldPrefix, const QString &newPrefix);
     void tabBarMenuRequested(QPoint pos, int tab);
     void tabTreeMenuRequested(QPoint pos, const QString &groupPath);
@@ -476,6 +473,7 @@ private:
     void updateContextMenuTimeout();
 
     void updateTrayMenuItemsTimeout();
+    void initTrayMenuItems();
 
     void updateItemPreviewAfterMs(int ms);
 
@@ -484,8 +482,6 @@ private:
     void toggleItemPreviewVisible();
 
     void onAboutToQuit();
-
-    void onSaveCommand(const Command &command);
 
     void onItemCommandActionTriggered(CommandAction *commandAction, const QString &triggeredShortcut);
     void onClipboardCommandActionTriggered(CommandAction *commandAction, const QString &triggeredShortcut);
@@ -502,6 +498,7 @@ private:
     void moveToBottom();
 
     void onBrowserCreated(ClipboardBrowser *browser);
+    void onBrowserLoaded(ClipboardBrowser *browser);
     void onBrowserDestroyed(ClipboardBrowserPlaceholder *placeholder);
 
     void onItemSelectionChanged(const ClipboardBrowser *browser);
@@ -517,7 +514,7 @@ private:
     void updateEnabledCommands();
 
     void updateCommands(QVector<Command> allCommands, bool forceSave);
-    bool addPluginCommands(QVector<Command> *allCommands);
+    bool syncInternalCommands(QVector<Command> *allCommands);
 
     void disableHideWindowOnUnfocus();
     void enableHideWindowOnUnfocus();
@@ -562,9 +559,6 @@ private:
 
     void updateWindowTransparency(bool mouseOver = false);
 
-    /** Update name and icon of "disable/enable monitoring" menu actions. */
-    void updateMonitoringActions();
-
     /** Return browser widget in given tab @a index. */
     ClipboardBrowserPlaceholder *getPlaceholder(int index) const;
 
@@ -588,18 +582,18 @@ private:
     bool closeMinimizes() const;
 
     template <typename SlotReturnType>
-    QAction *createAction(int id, MainWindowActionSlot<SlotReturnType> slot, QMenu *menu, QWidget *parent = nullptr);
+    QAction *createAction(Actions::Id id, MainWindowActionSlot<SlotReturnType> slot, QMenu *menu, QWidget *parent = nullptr);
 
-    QAction *addTrayAction(int id);
+    QAction *addTrayAction(Actions::Id id);
 
     void updateTabIcon(const QString &newName, const QString &oldName);
 
     template <typename Receiver, typename ReturnType>
-    QAction *addItemAction(int id, Receiver *receiver, ReturnType (Receiver::* slot)());
+    QAction *addItemAction(Actions::Id id, Receiver *receiver, ReturnType (Receiver::* slot)());
 
     QVector<Command> commandsForMenu(const QVariantMap &data, const QString &tabName, const QVector<Command> &allCommands);
     void addCommandsToItemMenu(ClipboardBrowser *c);
-    void addCommandsToTrayMenu(const QVariantMap &clipboardData);
+    void addCommandsToTrayMenu(const QVariantMap &clipboardData, QList<QAction*> *actions);
     void addMenuMatchCommand(MenuMatchCommands *menuMatchCommands, const QString &matchCommand, QAction *act);
     void runMenuCommandFilters(MenuMatchCommands *menuMatchCommands, QVariantMap &data);
     void interruptMenuCommandFilters(MenuMatchCommands *menuMatchCommands);
@@ -621,7 +615,7 @@ private:
 
     void updateActionShortcuts();
 
-    QAction *actionForMenuItem(int id, QWidget *parent, Qt::ShortcutContext context);
+    QAction *actionForMenuItem(Actions::Id id, QWidget *parent, Qt::ShortcutContext context);
 
     void addMenuItems(TrayMenu *menu, ClipboardBrowserPlaceholder *placeholder, int maxItemCount, const QString &searchText);
     void activateMenuItem(ClipboardBrowserPlaceholder *placeholder, const QVariantMap &data, bool omitPaste);
@@ -636,6 +630,9 @@ private:
     const Theme &theme() const;
 
     Action *runScript(const QString &script, const QVariantMap &data = QVariantMap());
+    bool runEventHandlerScript(const QString &script, const QVariantMap &data);
+    void runItemHandlerScript(
+        const QString &script, const ClipboardBrowser *browser, int firstRow, int lastRow);
 
     void activateCurrentItemHelper();
     void onItemClicked();
@@ -647,14 +644,13 @@ private:
     QMenu *m_menuItem;
     TrayMenu *m_trayMenu;
 
-    QSystemTrayIcon *m_tray;
+    SystemTrayIcon *m_tray;
 
     ToolBar *m_toolBar;
 
     MainWindowOptions m_options;
 
     bool m_clipboardStoringDisabled = false;
-    QPointer<QAction> m_actionToggleClipboardStoring;
 
     ClipboardBrowserSharedPtr m_sharedData;
 
@@ -664,7 +660,8 @@ private:
     QVector<Command> m_trayMenuCommands;
     QVector<Command> m_scriptCommands;
 
-    PlatformWindowPtr m_lastWindow;
+    PlatformWindowPtr m_windowForMenuPaste;
+    PlatformWindowPtr m_windowForMainPaste;
 
     QTimer m_timerUpdateFocusWindows;
     QTimer m_timerUpdateContextMenu;
@@ -690,7 +687,6 @@ private:
     bool m_activatingItem = false;
 
     QVector< QPointer<QAction> > m_actions;
-    MenuItems m_menuItems;
 
     QList<PersistentDisplayItem> m_displayItemList;
     PersistentDisplayItem m_currentDisplayItem;
@@ -703,6 +699,11 @@ private:
 
     bool m_isActiveWindow = false;
     bool m_singleClickActivate = 0;
+    bool m_enteringSearchMode = false;
+
+    QVector<int> m_overrides;
+    int m_maxEventHandlerScripts = 10;
+    QPointer<Action> m_actionCollectOverrides;
 };
 
 #endif // MAINWINDOW_H

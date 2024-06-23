@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "macplatform.h"
 
@@ -225,19 +208,13 @@ bool MacPlatform::findPluginDir(QDir *pluginsDir)
 {
     pluginsDir->setPath( qApp->applicationDirPath() );
     if (pluginsDir->dirName() != "MacOS") {
-        if ( pluginsDir->cd("plugins")) {
-            COPYQ_LOG("Found plugins in build tree");
-            return true;
-        }
-        return false;
+        return pluginsDir->cd("plugins");
     }
 
     if ( pluginsDir->cdUp() // Contents
             && pluginsDir->cd("PlugIns")
             && pluginsDir->cd("copyq"))
     {
-        // OK, found it in the bundle
-        COPYQ_LOG("Found plugins in application bundle");
         return true;
     }
 
@@ -246,8 +223,8 @@ bool MacPlatform::findPluginDir(QDir *pluginsDir)
     if ( pluginsDir->cdUp() // Contents
             && pluginsDir->cdUp() // copyq.app
             && pluginsDir->cdUp() // repo root
-            && pluginsDir->cd("plugins")) {
-        COPYQ_LOG("Found plugins in build tree");
+            && pluginsDir->cd("plugins"))
+    {
         return true;
     }
 

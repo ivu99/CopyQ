@@ -4,6 +4,7 @@ file(GLOB copyq_SOURCES
     app/*.cpp
     common/*.cpp
     gui/*.cpp
+    gui/notification.h
     item/*.cpp
     scriptable/*.cpp
     scriptable/scriptableproxy.h
@@ -17,8 +18,8 @@ set(copyq_RESOURCES copyq.qrc)
 
 # Qt include paths and definitions
 include_directories(${CMAKE_CURRENT_BINARY_DIR} .)
-include_directories(${Qt5Widgets_INCLUDES})
-add_definitions(${Qt5Widgets_DEFINITIONS})
+include_directories(${${copyq_qt}Widgets_INCLUDES})
+add_definitions(${${copyq_qt}Widgets_DEFINITIONS})
 
 include(notifications.cmake)
 include(platform/platform.cmake)
@@ -38,20 +39,36 @@ if (USE_QXT)
         ../qxt/qxtglobalshortcut.cpp
         )
     add_definitions( -DQXT_STATIC )
+    add_definitions( -DCOPYQ_GLOBAL_SHORTCUTS )
 endif()
 
 # translations
 file(GLOB copyq_TRANSLATIONS ../translations/*.ts)
 
-find_package(Qt5LinguistTools)
-if (Qt5LinguistTools_FOUND)
-    qt5_add_translation(copyq_QM ${copyq_TRANSLATIONS})
+find_package(${copyq_qt}LinguistTools)
+if (${copyq_qt}LinguistTools_FOUND)
+    qt_add_translation(copyq_QM ${copyq_TRANSLATIONS})
 endif()
 
-qt5_wrap_ui(copyq_FORMS_HEADERS ${copyq_FORMS})
-qt5_add_resources(copyq_RESOURCES_RCC ${copyq_RESOURCES})
+qt_wrap_ui(copyq_FORMS_HEADERS ${copyq_FORMS})
+qt_add_resources(copyq_RESOURCES_RCC ${copyq_RESOURCES})
 
 set(EXECUTABLE_OUTPUT_PATH ${PROJECT_BINARY_DIR})
+
+# Generate version.h from current git commit if available.
+set(copyq_VERSION_FILE "${CMAKE_CURRENT_BINARY_DIR}/common/version.cpp")
+add_custom_target(
+    generate_version_file
+    ALL
+    COMMAND ${CMAKE_COMMAND}
+        -D INPUT_FILE=${CMAKE_CURRENT_SOURCE_DIR}/common/version.cpp.in
+        -D OUTPUT_FILE=${copyq_VERSION_FILE}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/version_file.cmake
+    BYPRODUCTS ${copyq_VERSION_FILE}
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+set_source_files_properties(${copyq_VERSION_FILE} PROPERTIES GENERATED TRUE)
+set_property(SOURCE ${copyq_VERSION_FILE} PROPERTY SKIP_AUTOMOC ON)
 
 set(copyq_COMPILE
     ${copyq_COMPILE}
@@ -59,6 +76,7 @@ set(copyq_COMPILE
     ${copyq_FORMS_HEADERS}
     ${copyq_RESOURCES_RCC}
     ${copyq_QM}
+    ${copyq_VERSION_FILE}
     )
 
 if (NOT copyq_version)
@@ -68,14 +86,12 @@ endif()
 if (NOT APPLE)
     add_executable(${COPYQ_EXECUTABLE_NAME} ${copyq_COMPILE})
 else()
-    # On Macs we must ensure Carbon and Cocoa are linked
-    FIND_LIBRARY(CARBON_LIBRARY "Carbon")
-    FIND_LIBRARY(COCOA_LIBRARY "Cocoa")
-    MARK_AS_ADVANCED (CARBON_LIBRARY
-        COCOA_LIBRARY)
+    FIND_LIBRARY(CARBON_LIBRARY Carbon REQUIRED)
+    FIND_LIBRARY(COCOA_LIBRARY Cocoa REQUIRED)
+    MARK_AS_ADVANCED(CARBON_LIBRARY COCOA_LIBRARY)
     list(APPEND copyq_LIBRARIES "${CARBON_LIBRARY}" "${COCOA_LIBRARY}")
 
-    set(COPYQ_VERSION_REGEX "^v([0-9]+)\.([0-9]+)\.(.*)$")
+    set(COPYQ_VERSION_REGEX "^([0-9]+)\.([0-9]+)\.(.*)$")
     string(REGEX REPLACE "${COPYQ_VERSION_REGEX}"
         "\\1" CPACK_PACKAGE_VERSION_MAJOR
         "${copyq_version}"
@@ -103,13 +119,14 @@ else()
     add_executable(${COPYQ_EXECUTABLE_NAME} MACOSX_BUNDLE ${copyq_COMPILE})
 endif()
 
-add_dependencies(${COPYQ_EXECUTABLE_NAME} generate_version_header)
+target_sources(${COPYQ_EXECUTABLE_NAME} PRIVATE ${copyq_SOURCES})
+add_dependencies(${COPYQ_EXECUTABLE_NAME} generate_version_file)
 
 # Qt modules
 list(APPEND copyq_qt_modules Network Svg Xml Qml)
 foreach (copyq_qt_module ${copyq_qt_modules})
-    find_package(Qt5${copyq_qt_module} REQUIRED)
-    list(APPEND copyq_LIBRARIES Qt5::${copyq_qt_module})
+    find_package(${copyq_qt}${copyq_qt_module} REQUIRED)
+    list(APPEND copyq_LIBRARIES ${copyq_qt}::${copyq_qt_module})
 endforeach()
 
 # macros definitions for preprocessor and moc
@@ -120,7 +137,7 @@ set_target_properties(${COPYQ_EXECUTABLE_NAME} PROPERTIES LINK_FLAGS "${copyq_LI
 target_link_libraries(${COPYQ_EXECUTABLE_NAME} ${copyq_LIBRARIES})
 
 # install
-if (MSVC)
+if (WIN32)
     install(TARGETS ${COPYQ_EXECUTABLE_NAME}
         RUNTIME DESTINATION . COMPONENT Runtime
         LIBRARY DESTINATION . COMPONENT Runtime
@@ -139,61 +156,23 @@ if (NOT APPLE)
 else()
     set_source_files_properties(${copyq_QM} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources/translations")
 
+    set_target_properties(${COPYQ_EXECUTABLE_NAME} PROPERTIES MACOSX_BUNDLE TRUE)
     set_target_properties(${COPYQ_EXECUTABLE_NAME} PROPERTIES MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/../shared/Info.plist")
 
-    set(plugin_dest_dir "${COPYQ_EXECUTABLE_NAME}.app/Contents/PlugIns")
-    set(qtconf_dest_dir "${COPYQ_EXECUTABLE_NAME}.app/Contents/Resources")
+    set(BUNDLE "\${CMAKE_INSTALL_PREFIX}/${COPYQ_EXECUTABLE_NAME}.app")
 
-    macro(install_qt5_plugin _qt_plugin_name _qt_plugins_var)
-        get_target_property(_qt_plugin_path "${_qt_plugin_name}" LOCATION)
-        if(EXISTS "${_qt_plugin_path}")
-            get_filename_component(_qt_plugin_file "${_qt_plugin_path}" NAME)
-            get_filename_component(_qt_plugin_type "${_qt_plugin_path}" PATH)
-            get_filename_component(_qt_plugin_type "${_qt_plugin_type}" NAME)
-            set(_qt_plugin_dest "${plugin_dest_dir}/${_qt_plugin_type}")
-            install(FILES "${_qt_plugin_path}" DESTINATION "${_qt_plugin_dest}" COMPONENT Runtime)
-            set(${_qt_plugins_var}
-                "${${_qt_plugins_var}};\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${_qt_plugin_dest}/${_qt_plugin_file}")
-        else()
-            message(FATAL_ERROR "QT plugin ${_qt_plugin_name} not found")
-        endif()
-    endmacro()
-
-    # Install needed Qt plugins
-    foreach(_copyq_qt_module ${copyq_qt_modules} "Gui" "Widgets")
-        set(_module_plugins "${Qt5${_copyq_qt_module}_PLUGINS}")
-        foreach(_plugin ${_module_plugins})
-            install_qt5_plugin("${_plugin}" FIXUP_BUNDLE_QT_PLUGINS)
-        endforeach()
-    endforeach()
-
-    # install a qt.conf file
-    # this inserts some cmake code into the install script to write the file
-    install(CODE "
-        file(WRITE \"\${CMAKE_INSTALL_PREFIX}/${qtconf_dest_dir}/qt.conf\" \"[Paths]\nPlugins = PlugIns\nImports = Resources/qml\nQml2Imports = Resources/qml\n\")
-        "
-        COMPONENT Runtime
-        )
-
-    set(FIXUP_BUNDLE_APPS "\${CMAKE_INSTALL_PREFIX}/${COPYQ_EXECUTABLE_NAME}.app")
-
-    get_property(_copyq_installed_plugins GLOBAL PROPERTY COPYQ_INSTALLED_PLUGINS)
-
-    # Directories to look for dependencies
-    set(FIXUP_BUNDLE_DEP_DIRS "${CMAKE_BINARY_DIR};${QT_LIBRARY_DIRS};${Qt5Widgets_DIR}/../..")
-
-    message(STATUS "Fixup app: ${FIXUP_BUNDLE_APPS}")
-    message(STATUS "Fixup app plugins: ${_copyq_installed_plugins}")
-    message(STATUS "Fixup qt plugins: ${FIXUP_BUNDLE_QT_PLUGINS}")
-    message(STATUS "Fixup dirs: ${FIXUP_BUNDLE_DEP_DIRS}")
-    install(CODE "
-        include(BundleUtilities)
-        set(BU_CHMOD_BUNDLE_ITEMS ON)
-        fixup_bundle(\"${FIXUP_BUNDLE_APPS}\" \"${FIXUP_BUNDLE_QT_PLUGINS};${_copyq_installed_plugins}\" \"${FIXUP_BUNDLE_DEP_DIRS}\")
-        verify_app(\"${FIXUP_BUNDLE_APPS}\")
-        "
-        COMPONENT Runtime
-        )
+    # https://doc.qt.io/qt-6/qt-deploy-runtime-dependencies.html
+    # Generate a deployment script to be executed at install time
+    qt_generate_deploy_script(
+        TARGET ${COPYQ_EXECUTABLE_NAME}
+        OUTPUT_SCRIPT deploy_script
+        CONTENT "
+qt_deploy_runtime_dependencies(
+    EXECUTABLE \"${BUNDLE}\"
+    GENERATE_QT_CONF
+    VERBOSE
+)")
+    install(SCRIPT ${deploy_script})
 
     set(CPACK_GENERATOR "DragNDrop")
     include(CPack)

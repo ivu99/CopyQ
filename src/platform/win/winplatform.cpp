@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "app/applicationexceptionhandler.h"
 #include "common/log.h"
@@ -31,6 +14,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QKeyEvent>
+#include <QMetaObject>
 #include <QSettings>
 #include <QStringList>
 #include <QWidget>
@@ -48,110 +32,66 @@ void setBinaryFor(int fd)
     _setmode(fd, _O_BINARY);
 }
 
-bool isPortableVersion()
+QString portableConfigFolder()
 {
     const QString appDir = QCoreApplication::applicationDirPath();
-    const QString uninstPath = appDir + "/unins000.exe";
-    return !QFile::exists(uninstPath);
-}
+    if ( !QFileInfo(appDir).isWritable() )
+        return {};
 
-QDir configFolder(bool *isPortable)
-{
-    const QString appDir = QCoreApplication::applicationDirPath();
-    const QString path = appDir + "/config";
+    const QString uninstPath = appDir + QLatin1String("/unins000.exe");
+    if ( QFile::exists(uninstPath) )
+        return {};
+
+    const QString path = appDir + QLatin1String("/config");
     QDir dir(path);
 
-    QSettings::setDefaultFormat(QSettings::IniFormat);
+    if ( !dir.mkpath(".") || !dir.isReadable() )
+        return {};
 
-    *isPortable = isPortableVersion()
-            && QFileInfo(appDir).isWritable()
-            && dir.mkpath(".")
-            && dir.isReadable()
-            && QFileInfo(dir.absolutePath()).isWritable();
+    const QString fullPath = dir.absolutePath();
+    if ( !QFileInfo(fullPath).isWritable() )
+        return {};
 
-    return dir;
+    return fullPath;
 }
 
-void migrateDirectory(const QString oldPath, const QString newPath)
+void uninstallControlHandler();
+
+BOOL appQuit()
 {
-    QDir oldDir(oldPath);
-    QDir newDir(newPath);
-
-    if ( oldDir.exists() ) {
-        newDir.mkpath(".");
-
-        for ( const auto &fileName : oldDir.entryList(QDir::Files) ) {
-            const QString oldFileName = oldDir.absoluteFilePath(fileName);
-            const QString newFileName = newDir.absoluteFilePath(fileName);
-            COPYQ_LOG( QString("Migrating \"%1\" -> \"%2\"")
-                       .arg(oldFileName)
-                       .arg(newFileName) );
-            QFile::copy(oldFileName, newFileName);
-        }
+    uninstallControlHandler();
+    const bool invoked = QMetaObject::invokeMethod(
+        QCoreApplication::instance(), "quit", Qt::BlockingQueuedConnection);
+    if (!invoked) {
+        log("Failed to request application exit", LogError);
+        return FALSE;
     }
-}
-
-void migrateConfigToAppDir()
-{
-    // Don't use Windows registry.
-    QSettings::setDefaultFormat(QSettings::IniFormat);
-
-    bool isPortable;
-    const QDir dir = configFolder(&isPortable);
-
-    if (isPortable) {
-        const QString oldConfigFileName =
-                QSettings(QSettings::IniFormat, QSettings::UserScope,
-                          QCoreApplication::organizationName(),
-                          QCoreApplication::applicationName()).fileName();
-        const QString oldConfigPath = QDir::cleanPath(oldConfigFileName + "/..");
-
-        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, dir.absolutePath());
-        Settings newSettings;
-
-        if ( Settings::canModifySettings && newSettings.isEmpty() ) {
-            COPYQ_LOG("Migrating configuration to application directory.");
-            const QString newConfigPath = QDir::cleanPath(newSettings.fileName() + "/..");
-
-            // Migrate configuration from system directory.
-            migrateDirectory(oldConfigPath, newConfigPath);
-
-            // Migrate themes from system directory.
-            migrateDirectory(oldConfigPath + "/themes", newConfigPath + "/themes");
-        }
-    } else if ( dir.exists() ) {
-        log( QString("Ignoring configuration in \"%1\" (https://github.com/hluk/CopyQ/issues/583).")
-             .arg(dir.absolutePath()), LogWarning );
-    }
+    ExitProcess(EXIT_SUCCESS);
+    return TRUE;
 }
 
 BOOL ctrlHandler(DWORD fdwCtrlType)
 {
     switch (fdwCtrlType) {
     case CTRL_C_EVENT:
-        COPYQ_LOG("Terminating application on signal.");
-        QCoreApplication::exit();
-        return TRUE;
+        log("Terminating application on signal.");
+        return appQuit();
 
     case CTRL_CLOSE_EVENT:
-        COPYQ_LOG("Terminating application on close event.");
-        QCoreApplication::exit();
-        return TRUE;
+        log("Terminating application on close event.");
+        return appQuit();
 
     case CTRL_BREAK_EVENT:
-        COPYQ_LOG("Terminating application on break event.");
-        QCoreApplication::exit();
-        return TRUE;
+        log("Terminating application on break event.");
+        return appQuit();
 
     case CTRL_LOGOFF_EVENT:
-        COPYQ_LOG("Terminating application on log off.");
-        QCoreApplication::exit();
-        return TRUE;
+        log("Terminating application on log off.");
+        return appQuit();
 
     case CTRL_SHUTDOWN_EVENT:
-        COPYQ_LOG("Terminating application on shut down.");
-        QCoreApplication::exit();
-        return TRUE;
+        log("Terminating application on shut down.");
+        return appQuit();
 
     default:
         return FALSE;
@@ -164,6 +104,11 @@ void installControlHandler()
         log("Failed to set Windows control handler.", LogError);
 }
 
+void uninstallControlHandler()
+{
+    SetConsoleCtrlHandler(reinterpret_cast<PHANDLER_ROUTINE>(ctrlHandler), FALSE);
+}
+
 template <typename Application>
 Application *createApplication(int &argc, char **argv)
 {
@@ -172,12 +117,15 @@ Application *createApplication(int &argc, char **argv)
     setBinaryFor(0);
     setBinaryFor(1);
 
-    // Override log file for portable version.
-    bool isPortable;
-    const QDir dir = configFolder(&isPortable);
-    if (isPortable) {
-        const QString logFileName = dir.absolutePath() + "/copyq.log";
-        qputenv("COPYQ_LOG_FILE", logFileName.toUtf8());
+    // Don't use Windows registry.
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+
+    // Use config and log file in portable app folder.
+    const QString portableFolder = portableConfigFolder();
+    if ( !portableFolder.isEmpty() ) {
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, portableFolder);
+        qputenv("COPYQ_LOG_FILE", portableFolder.toUtf8() + "/copyq.log");
+        app->setProperty("CopyQ_item_data_path", portableFolder + QLatin1String("/items"));
     }
 
     return app;
@@ -307,38 +255,9 @@ QGuiApplication *WinPlatform::createTestApplication(int &argc, char **argv)
     return createApplication<QGuiApplication>(argc, argv);
 }
 
-void WinPlatform::loadSettings()
-{
-    migrateConfigToAppDir();
-}
-
 PlatformClipboardPtr WinPlatform::clipboard()
 {
     return PlatformClipboardPtr(new WinPlatformClipboard());
-}
-
-int WinPlatform::keyCode(const QKeyEvent &event)
-{
-    const int key = event.key();
-
-    // Some keys shouldn't be translated.
-    if ( key == Qt::Key_Return
-      || key == Qt::Key_Enter
-      || key == Qt::Key_Escape
-      || key == Qt::Key_Tab
-      || key == Qt::Key_Backtab
-      || key == Qt::Key_Backspace
-         )
-    {
-        return key;
-    }
-
-    const quint32 vk = event.nativeVirtualKey();
-    const UINT result = MapVirtualKeyW(vk, MAPVK_VK_TO_CHAR);
-    if (result != 0)
-        return result;
-
-    return key;
 }
 
 QStringList WinPlatform::getCommandLineArguments(int, char**)

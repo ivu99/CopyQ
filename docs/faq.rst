@@ -97,6 +97,8 @@ then choose what to import back.
 
    Importing tabs and commands won't override existing tabs, and will create new ones.
 
+See also: :ref:`backup`
+
 .. _faq-disable-notifications:
 
 How to enable or disable displaying notification when clipboard changes?
@@ -154,7 +156,10 @@ Add and modify automatic command to ignore text copied from the window:
    Button.
 4. Select "Show Advanced"
 5. Change "Window" text box to match the title (or part of it) of the
-   Window to ignore (e.g. ``KeePass``).
+   Window to ignore (e.g. ``KeePass``). But for **KeePassXC** (and possibly
+   other apps), it is better to set "Format" to ``x-kde-passwordManagerHint``
+   instead (also remember to remove the default that is set in the "Window"
+   setting, since both "Window" and "Format" need to match if they're set).
 6. Click "OK" button to save the changes.
 
 .. note::
@@ -191,7 +196,7 @@ to a separate file**. On Linux and macOS:
 
     copyq exit
     export COPYQ_LOG_LEVEL='DEBUG'
-    export COPYQ_LOG_FILE="$HOME\copyq.log"
+    export COPYQ_LOG_FILE="$HOME/copyq.log"
     echo "Logs will be written to $COPYQ_LOG_FILE"
     copyq
 
@@ -199,11 +204,11 @@ On Windows (in PowerShell):
 
 .. code-block:: powershell
 
-    & 'C:\Program Files (X86)\CopyQ\copyq.exe' exit
+    & 'C:\Program Files\CopyQ\copyq.exe' exit
     $env:COPYQ_LOG_LEVEL = 'DEBUG'
     $env:COPYQ_LOG_FILE = [Environment]::GetFolderPath("MyDocuments") + '\copyq.log'
     echo "Logs will be written to $env:COPYQ_LOG_FILE"
-    & 'C:\Program Files (X86)\CopyQ\copyq.exe'
+    & 'C:\Program Files\CopyQ\copyq.exe'
 
 How to preserve the order of copied items when copying or pasting multiple items?
 ---------------------------------------------------------------------------------
@@ -419,6 +424,26 @@ To get the command to launch for a shortcut:
    ::
 
       copyq -e "toggle()"
+
+.. _faq-force-hide-main-window:
+
+Why doesn't the main window close on tiling window managers?
+------------------------------------------------------------
+
+The main window remains open if it cannot minimize to task bar and tray icon is
+not available. This is a safety feature to allow users to see that the
+application is running and make any initial setup when the app is started for
+the first time.
+
+To force hiding main window:
+
+1. Open "Preferences" (``Ctrl+P`` shortcut).
+2. Go to "Layout" tab.
+3. Enable "Hide main window" option.
+
+Alternatively, run the following command::
+
+    copyq config hide_main_window true
 
 Why does encryption ask for password so often?
 ----------------------------------------------

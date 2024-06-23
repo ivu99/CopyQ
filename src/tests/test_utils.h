@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #ifndef TEST_UTILS_H
 #define TEST_UTILS_H
@@ -23,6 +6,7 @@
 #include "common/commandstatus.h"
 
 #include <QByteArray>
+#include <QKeySequence>
 #include <QString>
 #include <QStringList>
 #include <QTest>
@@ -66,14 +50,19 @@
 #define SKIP(MESSAGE) QSKIP(MESSAGE, SkipAll)
 
 #define WAIT_ON_OUTPUT(ARGUMENTS, OUTPUT) \
-    TEST( m_test->waitOnOutput((Args() << ARGUMENTS), (OUTPUT)) )
+    TEST( m_test->waitOnOutput((Args() << ARGUMENTS), toByteArray(OUTPUT)) )
 
 #define SKIP_ON_ENV(ENV) \
     if ( qgetenv(ENV) == "1" ) \
         SKIP("Unset " ENV " to run the tests")
 
 /// Interval to wait (in ms) before and after setting clipboard.
+#ifdef Q_OS_MAC
+// macOS seems to require larger delay before/after setting clipboard
 const int waitMsSetClipboard = 1000;
+#else
+const int waitMsSetClipboard = 250;
+#endif
 
 /// Interval to wait (in ms) for pasting clipboard.
 const int waitMsPasteClipboard = 1000;
@@ -102,6 +91,11 @@ inline QByteArray toByteArray(const char *text)
 inline QString testTab(int i)
 {
     return "Tab_&" + QString::number(i);
+}
+
+inline QString keyNameFor(QKeySequence::StandardKey standardKey)
+{
+    return QKeySequence(standardKey).toString();
 }
 
 #endif // TEST_UTILS_H

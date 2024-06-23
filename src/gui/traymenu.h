@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #ifndef TRAYMENU_H
 #define TRAYMENU_H
@@ -33,19 +16,22 @@ class TrayMenu final : public QMenu
 public:
     explicit TrayMenu(QWidget *parent = nullptr);
 
+    static void updateTextFromData(QAction *act, const QVariantMap &data);
+    static bool updateIconFromData(QAction *act, const QVariantMap &data);
+
     /**
      * Add clipboard item action with number key hint.
      *
      * Triggering this action emits clipboardItemActionTriggered() signal.
      */
-    void addClipboardItemAction(const QVariantMap &data, bool showImages);
+    QAction *addClipboardItemAction(const QVariantMap &data, bool showImages);
 
     void clearClipboardItems();
 
     void clearCustomActions();
 
     /** Add custom action. */
-    void addCustomAction(QAction *action);
+    void setCustomActions(QList<QAction*> actions);
 
     /** Clear clipboard item actions and curstom actions. */
     void clearAllActions();
@@ -83,11 +69,10 @@ protected:
     void inputMethodEvent(QInputMethodEvent *event) override;
 
 private:
-    void clearActionsWithProperty(const char *property);
-
     void onClipboardItemActionTriggered();
 
-    void updateActiveAction();
+    void delayedUpdateActiveAction();
+    void doUpdateActiveAction();
 
     void setSearchMenuItem(const QString &text);
 
@@ -105,6 +90,9 @@ private:
     QTimer m_timerUpdateActiveAction;
 
     bool m_rowIndexFromOne = true;
+
+    QList<QAction*> m_clipboardActions;
+    QList<QAction*> m_customActions;
 };
 
 #endif // TRAYMENU_H

@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #ifndef SCRIPTABLE_H
 #define SCRIPTABLE_H
@@ -33,6 +16,7 @@
 #include "platform/platformnativeinterface.h"
 
 class Action;
+class ScriptableByteArray;
 class ClipboardBrowser;
 class ItemFactory;
 class NetworkReply;
@@ -43,7 +27,6 @@ class QMimeData;
 class QNetworkReply;
 class QNetworkAccessManager;
 class QJSEngine;
-class QTextCodec;
 
 enum class ClipboardOwnership;
 
@@ -52,6 +35,7 @@ class Scriptable final : public QObject
     Q_OBJECT
     Q_PROPERTY(QJSValue inputSeparator READ getInputSeparator WRITE setInputSeparator)
     Q_PROPERTY(QJSValue mimeText READ getMimeText CONSTANT)
+    Q_PROPERTY(QJSValue mimeTextUtf8 READ getMimeTextUtf8 CONSTANT)
     Q_PROPERTY(QJSValue mimeHtml READ getMimeHtml CONSTANT)
     Q_PROPERTY(QJSValue mimeUriList READ getMimeUriList CONSTANT)
     Q_PROPERTY(QJSValue mimeWindowTitle READ getMimeWindowTitle CONSTANT)
@@ -67,6 +51,7 @@ class Scriptable final : public QObject
     Q_PROPERTY(QJSValue mimeShortcut READ getMimeShortcut CONSTANT)
     Q_PROPERTY(QJSValue mimeColor READ getMimeColor CONSTANT)
     Q_PROPERTY(QJSValue mimeOutputTab READ getMimeOutputTab CONSTANT)
+    Q_PROPERTY(QJSValue mimeDisplayItemInMenu READ getMimeDisplayItemInMenu CONSTANT)
 
     Q_PROPERTY(QJSValue plugins READ getPlugins CONSTANT)
 
@@ -74,9 +59,10 @@ class Scriptable final : public QObject
     Q_PROPERTY(QJSValue _copyqHasUncaughtException READ hasUncaughtException)
 
 public:
-    explicit Scriptable(
+    Scriptable(
             QJSEngine *engine,
             ScriptableProxy *proxy,
+            ItemFactory *factory = nullptr,
             QObject *parent = nullptr);
 
     enum class Abort {
@@ -90,6 +76,7 @@ public:
     QJSValue argument(int index) const;
 
     QJSValue newByteArray(const QByteArray &bytes) const;
+    QJSValue newByteArray(ScriptableByteArray *ba) const;
 
     QByteArray fromString(const QString &value) const;
     QVariant toVariant(const QJSValue &value);
@@ -134,6 +121,7 @@ public:
     void installObject(QObject *fromObj, const QMetaObject *metaObject, QJSValue &toObject);
 
     QJSValue getMimeText() const { return mimeText; }
+    QJSValue getMimeTextUtf8() const { return mimeTextUtf8; }
     QJSValue getMimeHtml() const { return mimeHtml; }
     QJSValue getMimeUriList() const { return mimeUriList; }
     QJSValue getMimeWindowTitle() const { return mimeWindowTitle; }
@@ -149,6 +137,7 @@ public:
     QJSValue getMimeShortcut() const { return mimeShortcut; }
     QJSValue getMimeColor() const { return mimeColor; }
     QJSValue getMimeOutputTab() const { return mimeOutputTab; }
+    QJSValue getMimeDisplayItemInMenu() const { return mimeDisplayItemInMenu; }
 
     QJSValue getPlugins();
 
@@ -165,6 +154,13 @@ public:
     void abortEvaluation(Abort abort = Abort::AllEvaluations);
 
 public slots:
+    QJSValue ByteArray() const;
+    QJSValue File() const;
+    QJSValue TemporaryFile() const;
+    QJSValue Dir() const;
+    QJSValue ItemSelection() const;
+    QJSValue Settings() const;
+
     QJSValue version();
     QJSValue help();
 
@@ -218,6 +214,7 @@ public slots:
     void insert();
     QJSValue remove();
     void edit();
+    QJSValue editItem();
     QJSValue move();
 
     QJSValue read();
@@ -310,6 +307,7 @@ public slots:
     QJSValue execute();
 
     QJSValue currentWindowTitle();
+    QJSValue currentClipboardOwner();
 
     QJSValue dialog();
 
@@ -386,10 +384,18 @@ public slots:
     void monitorClipboard();
     void provideClipboard();
     void provideSelection();
+    QJSValue isClipboardMonitorRunning();
 
     QJSValue clipboardFormatsToSave();
 
     QJSValue styles();
+
+    void onItemsAdded() {}
+    void onItemsRemoved() {}
+    void onItemsChanged() {}
+    void onTabSelected() {}
+    void onItemsLoaded() {}
+    void collectScriptOverrides();
 
 signals:
     void finished();
@@ -400,7 +406,8 @@ private:
     void onExecuteOutput(const QByteArray &output);
     void onMonitorClipboardChanged(const QVariantMap &data, ClipboardOwnership ownership);
     void onMonitorClipboardUnchanged(const QVariantMap &data);
-    void onSynchronizeSelection(ClipboardMode sourceMode, const QString &text, uint targetTextHash);
+    void onSynchronizeSelection(ClipboardMode sourceMode, uint sourceTextHash, uint targetTextHash);
+    void onFetchCurrentClipboardOwner(QString *title);
 
     bool sourceScriptCommands();
     void callDisplayFunctions(QJSValueList displayFunctions);
@@ -421,15 +428,14 @@ private:
     QJSValue copy(ClipboardMode mode);
     QJSValue changeItem(bool create);
     void nextToClipboard(int where);
+    void editContent(int editRow, const QString &format, const QByteArray &content, bool changeClipboard);
     QJSValue screenshot(bool select);
     QByteArray serialize(const QJSValue &value);
     QJSValue eval(const QString &script);
-    QTextCodec *codecFromNameOrThrow(const QJSValue &codecName);
     bool runAction(Action *action);
     bool runCommands(CommandType::CommandType type);
-    bool canExecuteCommand(const Command &command);
+    bool canExecuteCommand(const Command &command, QStringList *arguments);
     bool canExecuteCommandFilter(const QString &matchCommand);
-    bool canAccessClipboard() const;
     bool verifyClipboardAccess();
     void provideClipboard(ClipboardMode mode);
 
@@ -437,6 +443,7 @@ private:
     void insert(int row, int argumentsBegin, int argumentsEnd);
 
     QStringList arguments();
+    QVariantList argumentsAsVariants();
 
     void print(const QByteArray &message);
     void printError(const QByteArray &message);
@@ -448,22 +455,24 @@ private:
     QByteArray getClipboardData(const QString &mime, ClipboardMode mode = ClipboardMode::Clipboard);
     bool hasClipboardFormat(const QString &mime, ClipboardMode mode = ClipboardMode::Clipboard);
 
-    void synchronizeSelection(ClipboardMode targetMode);
+    bool canSynchronizeSelection(ClipboardMode targetMode);
 
     void saveData(const QString &tab);
 
     QJSValue readInput();
 
     PlatformClipboard *clipboardInstance();
-    const QMimeData *mimeData(ClipboardMode mode);
 
     void interruptibleSleep(int msec);
 
     NetworkReply *networkGetHelper();
     NetworkReply *networkPostHelper();
 
+    QJSValue newQObject(QObject *obj, const QJSValue &prototype) const;
+
     ScriptableProxy *m_proxy;
     QJSEngine *m_engine;
+    ItemFactory *m_factory;
     QJSValue m_temporaryFileClass;
     QString m_inputSeparator;
     QJSValue m_input;
@@ -501,6 +510,13 @@ private:
     QJSValue m_createFn;
     QJSValue m_createFnB;
     QJSValue m_createProperty;
+
+    QJSValue m_byteArrayPrototype;
+    QJSValue m_filePrototype;
+    QJSValue m_temporaryFilePrototype;
+    QJSValue m_dirPrototype;
+    QJSValue m_itemSelectionPrototype;
+    QJSValue m_settingsPrototype;
 };
 
 class NetworkReply final : public QObject {
@@ -545,14 +561,14 @@ class ScriptablePlugins final : public QObject {
     Q_OBJECT
 
 public:
-    explicit ScriptablePlugins(Scriptable *scriptable);
+    ScriptablePlugins(Scriptable *scriptable, ItemFactory *factory);
 
 public slots:
     QJSValue load(const QString &name);
 
 private:
-    ItemFactory *m_factory = nullptr;
     Scriptable *m_scriptable;
+    ItemFactory *m_factory;
     QMap<QString, QJSValue> m_plugins;
 };
 

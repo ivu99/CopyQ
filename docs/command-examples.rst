@@ -122,25 +122,21 @@ and invoked from menu (or using custom shortcut).
 Linkify
 ~~~~~~~
 
-Creates interactive link from plain text.
+Stores an item with interactive link from plain text URL copied to clipboard.
 
 .. code-block:: ini
 
     [Command]
-    Name=Linkify
-    Match=^(https?|ftps?|file|mailto)://
+    Automatic=true
     Command="
         copyq:
-        var link = str(input());
-        var href = '<a href=\"###\">###</a>';
-        write(
-          'text/plain', link,
-          'text/html', href.replace(/###/g, link)
-        );"
-    Input=text/plain
-    Automatic=true
-    Remove=true
+        const link = str(input());
+        const href = `<a href=\"${link}\">${link}</a>`;
+        setData('text/html', href);"
     Icon=\xf127
+    Input=text/plain
+    Match=^(https?|ftps?|file|mailto)://
+    Name=Linkify
 
 Highlight Text
 ~~~~~~~~~~~~~~
@@ -394,14 +390,14 @@ for item in row "2".
     Name=Copy Nth Item
     Command="
         copyq:
-        var shortcut = str(data(\"application/x-copyq-shortcut\"))
-        var number = shortcut ? shortcut.replace(/^\\D+/g, '') : currentItem();
-        selectItems(number)
-        copy(\"application/x-copyq-item\", pack(getItem(number)))"
+        var shortcut = str(data(\"application/x-copyq-shortcut\"));
+        var row = shortcut ? shortcut.replace(/^\\D+/g, '') : currentItem();
+        var itemIndex = (config('row_index_from_one') == 'true') ? row - 1 : row;
+        selectItems(itemIndex);
+        copy(\"application/x-copyq-item\", pack(getItem(itemIndex)));"
     InMenu=true
     Icon=\xf0cb
     Shortcut=ctrl+1, ctrl+2, ctrl+3, ctrl+4, ctrl+5, ctrl+6, ctrl+7, ctrl+8, ctrl+9, ctrl+0
-    GlobalShortcut=meta+shift+w, meta+shift+e, meta+shift+q, DISABLED
 
 Edit Files
 ~~~~~~~~~~
@@ -565,4 +561,32 @@ Change Upper/Lower Case of Selected Text
     GlobalShortcut=meta+ctrl+u
     Icon=\xf034
     Name=Toggle Upper/Lower Case
+
+
+
+Change Copied Text to Title Case
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: ini
+
+    [Command]
+    Name=Paste as title case
+    Command="
+        copyq: 
+        function toTitleCase(str) {
+          return str.replace(
+            /\\w\\S*/g,
+            function(txt) {
+              return txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase();
+            }
+          );
+        }
+        copy(toTitleCase(str(input())))
+               paste()
+        "
+    Input=text/plain
+    IsGlobalShortcut=true
+    HideWindow=true
+    Icon=\xf15b
+    GlobalShortcut=meta+ctrl+t
 

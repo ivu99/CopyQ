@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "clipboardmonitor.h"
 
@@ -28,12 +11,28 @@
 #include "item/serialize.h"
 #include "platform/platformclipboard.h"
 
+#ifdef COPYQ_WS_X11
+#   include "platform/x11/x11info.h"
+#endif
+
 #include <QApplication>
+#include <QClipboard>
 
 namespace {
 
 bool hasSameData(const QVariantMap &data, const QVariantMap &lastData)
 {
+    // Detect change also in case the data is unchanged but previously copied
+    // by CopyQ and now externally. This solves storing a copied text which was
+    // previously synchronized from selection to clipboard via CopyQ.
+    if (
+            !lastData.value(mimeOwner).toByteArray().isEmpty()
+            && data.value(mimeOwner).toByteArray().isEmpty()
+       )
+    {
+        return false;
+    }
+
     for (auto it = lastData.constBegin(); it != lastData.constEnd(); ++it) {
         const auto &format = it.key();
         if ( !format.startsWith(COPYQ_MIME_PREFIX)
@@ -61,17 +60,33 @@ bool isClipboardDataHidden(const QVariantMap &data)
     return data.value(mimeHidden).toByteArray() == "1";
 }
 
+int defaultOwnerUpdateInterval()
+{
+#ifdef COPYQ_WS_X11
+    if ( X11Info::isPlatformX11() )
+        return 150;
+#endif
+    return 0;
+}
+
 } // namespace
 
 ClipboardMonitor::ClipboardMonitor(const QStringList &formats)
     : m_clipboard(platformNativeInterface()->clipboard())
     , m_formats(formats)
+    , m_ownerMonitor(this)
 {
     const AppConfig config;
     m_storeClipboard = config.option<Config::check_clipboard>();
     m_clipboardTab = config.option<Config::clipboard_tab>();
 
-    m_clipboard->startMonitoring(formats);
+    const int ownerUpdateInterval = config.option<Config::update_clipboard_owner_delay_ms>();
+    m_ownerMonitor.setUpdateInterval(
+        ownerUpdateInterval < 0 ? defaultOwnerUpdateInterval() : ownerUpdateInterval);
+
+    m_formats.append({mimeOwner, mimeWindowTitle, mimeItemNotes, mimeHidden});
+    m_formats.removeDuplicates();
+
     connect( m_clipboard.get(), &PlatformClipboard::changed,
              this, &ClipboardMonitor::onClipboardChanged );
 
@@ -86,14 +101,38 @@ ClipboardMonitor::ClipboardMonitor(const QStringList &formats)
         COPYQ_LOG("Disabling selection monitoring");
         m_clipboard->setMonitoringEnabled(ClipboardMode::Selection, false);
     }
-
-    onClipboardChanged(ClipboardMode::Selection);
 #endif
-    onClipboardChanged(ClipboardMode::Clipboard);
+}
+
+void ClipboardMonitor::startMonitoring()
+{
+    setClipboardOwner(currentClipboardOwner());
+    connect(QGuiApplication::clipboard(), &QClipboard::changed,
+            this, [this](){ m_ownerMonitor.update(); });
+
+    m_clipboard->startMonitoring(m_formats);
+}
+
+QString ClipboardMonitor::currentClipboardOwner()
+{
+    QString owner;
+    emit fetchCurrentClipboardOwner(&owner);
+    return owner;
+}
+
+void ClipboardMonitor::setClipboardOwner(const QString &owner)
+{
+    if (m_clipboardOwner != owner) {
+        m_clipboardOwner = owner;
+        m_clipboard->setClipboardOwner(m_clipboardOwner);
+        COPYQ_LOG(QStringLiteral("Clipboard owner: %1").arg(owner));
+    }
 }
 
 void ClipboardMonitor::onClipboardChanged(ClipboardMode mode)
 {
+    m_ownerMonitor.update();
+
     QVariantMap data = m_clipboard->data(mode, m_formats);
     auto clipboardData = mode == ClipboardMode::Clipboard
             ? &m_clipboardData : &m_selectionData;
@@ -111,12 +150,20 @@ void ClipboardMonitor::onClipboardChanged(ClipboardMode mode)
 
     *clipboardData = data;
 
+    if ( !data.contains(mimeOwner)
+        && !data.contains(mimeWindowTitle)
+        && !m_clipboardOwner.isEmpty() )
+    {
+            data.insert(mimeWindowTitle, m_clipboardOwner.toUtf8());
+    }
+
     COPYQ_LOG( QString("%1 changed, owner is \"%2\"")
                .arg(mode == ClipboardMode::Clipboard ? "Clipboard" : "Selection",
                     getTextData(data, mimeOwner)) );
 
 #ifdef HAS_MOUSE_SELECTIONS
     if ( (mode == ClipboardMode::Clipboard ? m_clipboardToSelection : m_selectionToClipboard)
+        && m_clipboard->isSelectionSupported()
         && !data.contains(mimeOwner) )
     {
         const auto text = getTextData(data);
@@ -124,29 +171,29 @@ void ClipboardMonitor::onClipboardChanged(ClipboardMode mode)
             const auto targetMode = mode == ClipboardMode::Clipboard
                 ? ClipboardMode::Selection
                 : ClipboardMode::Clipboard;
-            const QVariantMap targetData = m_clipboard->data(targetMode, QStringList(mimeText));
-            const uint targetTextHash = qHash( getTextData(targetData, mimeText) );
-            emit synchronizeSelection(mode, text, targetTextHash);
+            const QVariantMap targetData = m_clipboard->data(targetMode, {mimeText});
+            const uint targetTextHash = qHash( targetData.value(mimeText).toByteArray() );
+            const uint sourceTextHash = qHash( data.value(mimeText).toByteArray() );
+            emit synchronizeSelection(mode, sourceTextHash, targetTextHash);
         }
     }
 
     // omit running run automatic commands when disabled
-    if ( !m_runSelection && mode == ClipboardMode::Selection )
+    if ( !m_runSelection && mode == ClipboardMode::Selection ) {
+        if ( m_storeSelection && !m_clipboardTab.isEmpty() ) {
+            data.insert(mimeClipboardMode, QByteArrayLiteral("selection"));
+            setTextData(&data, m_clipboardTab, mimeOutputTab);
+            emit saveData(data);
+        }
         return;
+    }
 #endif
 
     if (mode != ClipboardMode::Clipboard) {
         const QString modeName = mode == ClipboardMode::Selection
-                ? "selection"
-                : "find buffer";
+                ? QStringLiteral("selection")
+                : QStringLiteral("find buffer");
         data.insert(mimeClipboardMode, modeName);
-    }
-
-    // add window title of clipboard owner
-    if ( !data.contains(mimeOwner) && !data.contains(mimeWindowTitle) ) {
-        const QByteArray windowTitle = m_clipboard->clipboardOwner();
-        if ( !windowTitle.isEmpty() )
-            data.insert(mimeWindowTitle, windowTitle);
     }
 
     // run automatic commands

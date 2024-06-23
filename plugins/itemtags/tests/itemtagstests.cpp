@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "itemtagstests.h"
 
@@ -235,11 +218,14 @@ void ItemTagsTests::tagSelected()
     RUN("add" << "A" << "B" << "C", "");
     RUN("keys" << "CTRL+F1", "");
     WAIT_ON_OUTPUT("plugins.itemtags.tags(0)", "x\n");
+    RUN("plugins.itemtags.tags(1)", "");
+    RUN("plugins.itemtags.tags(2)", "");
 
     RUN("selectItems(0,1)", "true\n");
     RUN("keys" << "CTRL+F2", "");
     WAIT_ON_OUTPUT("plugins.itemtags.tags(0)", "x\ny\n");
     RUN("plugins.itemtags.tags(1)", "y\n");
+    RUN("plugins.itemtags.tags(2)", "");
 }
 
 void ItemTagsTests::untagSelected()

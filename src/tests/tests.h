@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #ifndef TESTS_H
 #define TESTS_H
@@ -49,6 +32,8 @@ private slots:
     void commandVersion();
     void badCommand();
     void badSessionName();
+
+    void commandCatchExceptions();
 
     void commandExit();
     void commandEval();
@@ -109,6 +94,7 @@ private slots:
     void commandHasClipboardFormat();
 
     void commandEdit();
+    void commandEditItem();
 
     void commandGetSetCurrentPath();
 
@@ -120,6 +106,8 @@ private slots:
 
     void commandsImportExportCommands();
     void commandsImportExportCommandsFixIndentation();
+
+    void commandsAddCommandsRegExp();
 
     void commandScreenshot();
 
@@ -149,6 +137,11 @@ private slots:
     void classFile();
     void classDir();
     void classTemporaryFile();
+    void classItemSelection();
+    void classItemSelectionGetCurrent();
+    void classItemSelectionByteArray();
+    void classItemSelectionSort();
+    void classSettings();
     void calledWithInstance();
 
     void pipingCommands();
@@ -165,8 +158,13 @@ private slots:
     void deleteItems();
     void searchItems();
     void searchItemsAndSelect();
+    void searchItemsAndCopy();
     void searchRowNumber();
+    void searchAccented();
     void copyItems();
+    void selectAndCopyOrder();
+
+    void sortAndReverse();
 
     void createTabDialog();
 
@@ -186,6 +184,7 @@ private slots:
     void action();
     void insertRemoveItems();
     void renameTab();
+    void renameClipboardTab();
     void importExportTab();
 
     void removeAllFoundItems();
@@ -218,6 +217,11 @@ private slots:
     void configAutostart();
 
     void configPathEnvVariable();
+    void itemDataPathEnvVariable();
+
+    void configTabs();
+
+    void selectedItems();
 
     void shortcutCommand();
     void shortcutCommandOverrideEnter();
@@ -249,7 +253,20 @@ private slots:
     void scriptCommandEnhanceFunction();
     void scriptCommandEndingWithComment();
     void scriptCommandWithError();
+
+    void scriptPaste();
+    void scriptOnTabSelected();
+    void scriptOnItemsRemoved();
+    void scriptOnItemsAdded();
+    void scriptOnItemsChanged();
+    void scriptOnItemsLoaded();
+    void scriptEventMaxRecursion();
+    void scriptSlowCollectOverrides();
+
     void displayCommand();
+    void displayCommandForMenu();
+
+    void synchronizeInternalCommands();
 
     void queryKeyboardModifiersCommand();
     void pointerPositionCommand();
@@ -287,6 +304,12 @@ private slots:
     void pluginNotInstalled();
 
     void startServerAndRunCommand();
+
+    void avoidStoringPasswords();
+
+    void currentClipboardOwner();
+
+    void saveLargeItem();
 
 private:
     void clearServerErrors();

@@ -4,8 +4,10 @@ set -xeuo pipefail
 
 cpack
 
-app_bundle_path="$(echo _CPack_Packages/Darwin/DragNDrop/copyq-*/CopyQ.app)"
+app_bundle_path="CopyQ.app"
 executable="${PWD}/${app_bundle_path}/Contents/MacOS/CopyQ"
+
+ls -Rl "$app_bundle_path"
 
 # Test the app before deployment.
 "$executable" --help
@@ -19,11 +21,14 @@ ls "$("$executable" info translations)/"
 test "$("$executable" info has-global-shortcuts)" -eq "1"
 
 # Uninstall local Qt to make sure we only use libraries from the bundle
-remove=$(brew list --formula)
-brew remove --force --ignore-dependencies $remove
+brew remove --ignore-dependencies --force \
+    qt@6 copyq/kde/kf6-knotifications copyq/kde/kf6-kstatusnotifieritem freetype
+
+# Disable animations for tests
+defaults write -g NSAutomaticWindowAnimationsEnabled -bool false
+defaults write -g NSWindowResizeTime -float 0.001
 
 (
-    export PATH=""
     export LD_LIBRARY_PATH=""
 
     # Run tests (retry once on error).
@@ -35,7 +40,8 @@ brew remove --force --ignore-dependencies $remove
 
 # Print dependencies to let us further make sure that we don't depend on local libraries
 otool -L "$executable"
+otool -L "$app_bundle_path/Contents/PlugIns/"*/*.dylib
 otool -L "$app_bundle_path/Contents/PlugIns/copyq/"*
-otool -L "$app_bundle_path/Contents/Frameworks/"Qt*.framework/Versions/5/Qt*
+otool -L "$app_bundle_path/Contents/Frameworks/"Qt*.framework/Versions/*/Qt*
 
 mv copyq-*.dmg CopyQ.dmg

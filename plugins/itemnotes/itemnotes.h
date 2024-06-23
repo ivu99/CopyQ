@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #ifndef ITEMNOTES_H
 #define ITEMNOTES_H
@@ -23,6 +6,7 @@
 #include "gui/icons.h"
 #include "item/itemwidgetwrapper.h"
 
+#include <QVariant>
 #include <QWidget>
 
 namespace Ui {
@@ -79,13 +63,13 @@ public:
     QString name() const override { return tr("Notes"); }
     QString author() const override { return QString(); }
     QString description() const override { return tr("Display notes for items."); }
-    QVariant icon() const override { return QVariant(IconPenSquare); }
+    QVariant icon() const override { return QVariant(IconPenToSquare); }
 
     QStringList formatsToSave() const override;
 
-    QVariantMap applySettings() override;
+    void applySettings(QSettings &settings) override;
 
-    void loadSettings(const QVariantMap &settings) override { m_settings = settings; }
+    void loadSettings(const QSettings &settings) override;
 
     QWidget *createSettingsWidget(QWidget *parent) override;
 
@@ -94,7 +78,9 @@ public:
     bool matches(const QModelIndex &index, const ItemFilter &filter) const override;
 
 private:
-    QVariantMap m_settings;
+    bool m_notesAtBottom = false;
+    bool m_notesBeside = false;
+    bool m_showTooltip = false;
     std::unique_ptr<Ui::ItemNotesSettings> ui;
 };
 

@@ -54,7 +54,7 @@ On **Ubuntu** you can install all build dependencies with:
 
 Fedora / RHEL / Centos
 ^^^^^^^^^^^^^^^^^^^^^^
-On **Fedora** and derivatives you can install all build dependencies with:
+On **Fedora** and derivatives you can install all build dependencies with Qt 5:
 
 ::
 
@@ -63,14 +63,39 @@ On **Fedora** and derivatives you can install all build dependencies with:
       extra-cmake-modules \
       gcc-c++ \
       git \
+      kf5-knotifications-devel \
+      libSM-devel \
       libXfixes-devel \
       libXtst-devel \
       qt5-qtbase-devel \
+      qt5-qtbase-private-devel \
       qt5-qtdeclarative-devel \
       qt5-qtsvg-devel \
       qt5-qttools-devel \
       qt5-qtwayland-devel \
       qt5-qtx11extras-devel \
+      wayland-devel
+
+To build with Qt 6:
+
+::
+
+    sudo yum install \
+      cmake \
+      extra-cmake-modules \
+      gcc-c++ \
+      git \
+      kf6-knotifications-devel \
+      kf6-kstatusnotifieritem-devel \
+      libSM-devel \
+      libXfixes-devel \
+      libXtst-devel \
+      qt6-qtbase-devel \
+      qt6-qtbase-private-devel \
+      qt6-qtdeclarative-devel \
+      qt6-qtsvg-devel \
+      qt6-qttools-devel \
+      qt6-qtwayland-devel \
       wayland-devel
 
 Build and Install
@@ -121,7 +146,19 @@ On OS X, required Qt 5 libraries and utilities can be easily installed with `Hom
 
 ::
 
-    brew install qt5
+    cd CopyQ
+    git -C "utils/github/homebrew" init .
+    git -C "utils/github/homebrew" add .
+    git -C "utils/github/homebrew" commit -m "Initial"
+    
+    brew tap copyq/kde utils/github/homebrew/
+    # if the above "brew tap" command produces an error like
+    #     "Error: Tap copyq/kde remote mismatch"
+    # then run
+    #     brew untap --force copyq/kde
+    # and re-run the above "brew tap" command
+
+    brew install qt6 copyq/kde/kf6-knotifications copyq/kde/kf6-kstatusnotifieritem
 
 Build with the following commands:
 
@@ -133,3 +170,17 @@ Build with the following commands:
 
 This will produce a self-contained application bundle ``CopyQ.app``
 which can then be copied or moved into ``/Applications``.
+
+NOTE: If no Items are shown when you start CopyQ and open "File - Preferences - Items",
+then your CopyQ plugins were not installed. If you saw warning messages like this::
+
+     /<some_path>/install_name_tool: warning: changes being made to the file will invalidate the code signature in: /<some_path>/CopyQ/_CPack_Packages/Darwin/DragNDrop/copyq-6.2.0-Darwin/CopyQ.app/Contents/Plugins/<some_file>.dylib
+
+when you ran the above "cpack" command, then you have likely encountered
+`issue 1903 <https://github.com/hluk/CopyQ/issues/1903/>`__.
+
+In that case you may codesign the CopyQ app again using the following command,
+un-install the previous CopyQ app, and install the re-signed ``CopyQ.app``::
+
+    codesign --force --deep --sign - $PWD/_CPack_Packages/Darwin/DragNDrop/copyq-*-Darwin/CopyQ.app
+

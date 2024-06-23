@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "itemfakevim.h"
 #include "ui_itemfakevimsettings.h"
@@ -44,8 +27,10 @@ using namespace FakeVim::Internal;
 #include <QPushButton>
 #include <QAbstractTextDocumentLayout>
 #include <QScrollBar>
+#include <QSettings>
 #include <QStyle>
 #include <QStyleHints>
+#include <QVariantMap>
 #include <QtPlugin>
 
 #define EDITOR(s) (m_textEdit ? m_textEdit->s : m_plainTextEdit->s)
@@ -53,6 +38,9 @@ using namespace FakeVim::Internal;
 namespace {
 
 const char propertyWrapped[] = "CopyQ_fakevim_wrapped";
+
+const QLatin1String configReallyEnabled("really_enable");
+const QLatin1String configSourceFile("source_file");
 
 // The same method for rendering document doesn't work for QPlainTextEdit.
 // This is simplified code from Qt source code.
@@ -767,23 +755,20 @@ QVariant ItemFakeVimLoader::icon() const
 
 void ItemFakeVimLoader::setEnabled(bool enabled)
 {
-    m_enabled = enabled;
+    ItemLoaderInterface::setEnabled(enabled);
     updateCurrentlyEnabledState();
 }
 
-QVariantMap ItemFakeVimLoader::applySettings()
+void ItemFakeVimLoader::applySettings(QSettings &settings)
 {
-    QVariantMap settings;
-    settings["really_enable"] = m_reallyEnabled = ui->checkBoxEnable->isChecked();
-    settings["source_file"] = m_sourceFileName = ui->lineEditSourceFileName->text();
-
-    return settings;
+    settings.setValue(configReallyEnabled, ui->checkBoxEnable->isChecked());
+    settings.setValue(configSourceFile, ui->lineEditSourceFileName->text());
 }
 
-void ItemFakeVimLoader::loadSettings(const QVariantMap &settings)
+void ItemFakeVimLoader::loadSettings(const QSettings &settings)
 {
-    m_reallyEnabled = settings.value("really_enable", false).toBool();
-    m_sourceFileName = settings.value("source_file").toString();
+    m_reallyEnabled = settings.value(configReallyEnabled, false).toBool();
+    m_sourceFileName = settings.value(configSourceFile).toString();
     updateCurrentlyEnabledState();
 }
 
@@ -827,7 +812,7 @@ void ItemFakeVimLoader::updateCurrentlyEnabledState()
     if ( qobject_cast<QGuiApplication*>(qApp) == nullptr )
         return;
 
-    const bool enable = m_enabled && m_reallyEnabled;
+    const bool enable = isEnabled() && m_reallyEnabled;
     if (m_currentlyEnabled == enable)
         return;
 

@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "tabwidget.h"
 #include "tabbar.h"
@@ -145,9 +128,9 @@ void TabWidget::setTabItemCountVisible(bool visible)
     m_tabs->adjustSize();
 }
 
-void TabWidget::updateTabIcon(const QString &tabName)
+void TabWidget::setTabIcon(const QString &tabName, const QString &icon)
 {
-    m_tabs->updateTabIcon(tabName);
+    m_tabs->setTabIcon(tabName, icon);
 }
 
 void TabWidget::insertTab(int tabIndex, QWidget *widget, const QString &tabName)
@@ -195,23 +178,6 @@ QStringList TabWidget::tabs() const
     return tabs;
 }
 
-void TabWidget::moveTab(int from, int to)
-{
-    Q_ASSERT(to >= 0);
-    Q_ASSERT(from >= 0);
-    Q_ASSERT(to < count());
-    Q_ASSERT(from < count());
-
-    m_tabs->moveTab(from, to);
-
-    bool isCurrent = currentIndex() == from;
-
-    m_stackedWidget->insertWidget(to, m_stackedWidget->widget(from));
-
-    if (isCurrent)
-        setCurrentIndex(to);
-}
-
 void TabWidget::addToolBars(QMainWindow *mainWindow)
 {
     mainWindow->addToolBar(Qt::TopToolBarArea, m_toolBar);
@@ -251,10 +217,20 @@ void TabWidget::loadTabInfo()
         m_tabItemCounters[it.key()] = it.value().toInt();
 }
 
-void TabWidget::updateTabs()
+void TabWidget::updateTabs(QSettings &settings)
 {
     m_tabs->setCollapsedTabs(m_collapsedTabs);
-    m_tabs->updateTabIcons();
+
+    QHash<QString, QString> tabIcons;
+    const int size = settings.beginReadArray(QStringLiteral("Tabs"));
+    for(int i = 0; i < size; ++i) {
+        settings.setArrayIndex(i);
+        const QString name = settings.value(QStringLiteral("name")).toString();
+        const QString icon = settings.value(QStringLiteral("icon")).toString();
+        tabIcons[name] = icon;
+    }
+    settings.endArray();
+    m_tabs->updateTabIcons(tabIcons);
 }
 
 void TabWidget::setCurrentIndex(int tabIndex)
@@ -307,25 +283,7 @@ void TabWidget::setTabBarHidden(bool hidden)
 
 void TabWidget::setTreeModeEnabled(bool enabled)
 {
-    const QStringList tabs = this->tabs();
-
-    if (enabled)
-        createTabTree();
-    else
-        createTabBar();
-
-    m_ignoreCurrentTabChanges = true;
-    for (int i = 0; i < tabs.size(); ++i) {
-        const QString &tabName = tabs[i];
-        m_tabs->insertTab(i, tabName);
-        m_tabs->setTabItemCount(tabName, itemCountLabel(tabName));
-    }
-    m_tabs->setCurrentTab( currentIndex() );
-    m_ignoreCurrentTabChanges = false;
-
-    m_tabs->setCollapsedTabs(m_collapsedTabs);
-
-    updateToolBar();
+    setTreeModeEnabled(enabled, this->tabs());
 }
 
 void TabWidget::setTabItemCount(const QString &tabName, int itemCount)
@@ -336,6 +294,30 @@ void TabWidget::setTabItemCount(const QString &tabName, int itemCount)
     m_tabItemCounters[tabName] = itemCount;
 
     updateTabItemCount(tabName);
+}
+
+void TabWidget::setTabsOrder(const QStringList &tabs)
+{
+    QStringList currentTabs = this->tabs();
+    if (tabs == currentTabs)
+        return;
+
+    m_ignoreCurrentTabChanges = true;
+
+    for (int i = 0; i < tabs.size(); ++i) {
+        const int tabIndex = currentTabs.indexOf(tabs[i]);
+        if (tabIndex != -1 && tabIndex != i) {
+            QWidget *widget = m_stackedWidget->widget(tabIndex);
+            m_stackedWidget->removeWidget(widget);
+            m_stackedWidget->insertWidget(i, widget);
+            currentTabs.move(tabIndex, i);
+        }
+    }
+
+    m_stackedWidget->setCurrentIndex( currentIndex() );
+    setTreeModeEnabled(m_toolBarCurrent == m_toolBarTree, currentTabs);
+
+    m_ignoreCurrentTabChanges = false;
 }
 
 bool TabWidget::eventFilter(QObject *, QEvent *event)
@@ -489,4 +471,23 @@ QString TabWidget::itemCountLabel(const QString &name)
 
     const int count = m_tabItemCounters.value(name, -1);
     return count > 0 ? QString::number(count) : count == 0 ? QString() : QLatin1String("?");
+}
+
+void TabWidget::setTreeModeEnabled(bool enabled, const QStringList &tabs)
+{
+    if (enabled)
+        createTabTree();
+    else
+        createTabBar();
+
+    m_ignoreCurrentTabChanges = true;
+    for (int i = 0; i < tabs.size(); ++i) {
+        const QString &tabName = tabs[i];
+        m_tabs->insertTab(i, tabName);
+        m_tabs->setTabItemCount(tabName, itemCountLabel(tabName));
+    }
+    m_tabs->setCurrentTab( currentIndex() );
+    m_ignoreCurrentTabChanges = false;
+
+    updateToolBar();
 }

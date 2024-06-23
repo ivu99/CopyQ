@@ -1,20 +1,23 @@
 #!/usr/bin/bash
-set -exo pipefail
+set -exuo pipefail
 
 # shellcheck disable=SC1091
 source utils/appveyor/env.sh
-
-Source=$APPVEYOR_BUILD_FOLDER
-Destination=$APPVEYOR_BUILD_FOLDER/$APP
-Executable=$Destination/copyq.exe
-BuildPlugins=$BUILD_PATH/plugins/$BUILD_SUB_DIR
 
 mkdir -p "$Destination"
 
 cmake --install "$BUILD_PATH" --config Release --prefix "$Destination" --verbose
 
-cp -v "$INSTALL_PREFIX/bin/KF5"*.dll "$Destination"
-cp -v "$INSTALL_PREFIX/bin/snoretoast.exe" "$Destination"
+if [[ $WITH_NATIVE_NOTIFICATIONS == ON ]]; then
+    cp -v "$INSTALL_PREFIX/bin/KF6"*.dll "$Destination"
+    cp -v "$INSTALL_PREFIX/bin/snoretoast.exe" "$Destination"
+    kf_libraries=(
+        "$Destination/KF6ConfigCore.dll"
+        "$Destination/KF6Notifications.dll"
+    )
+else
+    kf_libraries=()
+fi
 
 cp -v "$Source/AUTHORS" "$Destination"
 cp -v "$Source/LICENSE" "$Destination"
@@ -34,12 +37,8 @@ cp -v "$OPENSSL_PATH/$LIBSSL" "$Destination"
 
 "$QTDIR/bin/windeployqt" --help
 "$QTDIR/bin/windeployqt" \
-    --no-system-d3d-compiler \
-    --no-angle \
-    --no-opengl-sw \
-    --no-quick \
-    "$Destination/KF5ConfigCore.dll" \
-    "$Destination/KF5Notifications.dll" \
+    $WINDEPLOYQT_ARGS \
+    "${kf_libraries[@]}" \
     "$Executable"
 
 # Create and upload portable zip file.
@@ -47,7 +46,7 @@ cp -v "$OPENSSL_PATH/$LIBSSL" "$Destination"
 appveyor PushArtifact "$APP.zip" -DeploymentName "CopyQ Portable"
 
 # This works with minGW, not msvc.
-# objdump -x "$Destination/KF5Notifications.dll" | grep -F "DLL Name"
+# objdump -x "$Destination/KF6Notifications.dll" | grep -F "DLL Name"
 # objdump -x "$Destination/copyq.exe" | grep -F "DLL Name"
 
 # Note: Following removes system-installed dlls to verify required libs are included.
@@ -56,44 +55,34 @@ rm -vf /c/Windows/System32/libssl-*
 rm -vf /c/Windows/SysWOW64/libcrypto-*
 rm -vf /c/Windows/SysWOW64/libssl-*
 OldPath=$PATH
-export PATH=$Destination
-
-export QT_FORCE_STDERR_LOGGING=1
-export COPYQ_TESTS_RERUN_FAILED=1
+export PATH="$GPGPATH":$Destination
 "$Executable" --help
 "$Executable" --version
 "$Executable" --info
-"$Executable" tests
-
-# Take a screenshot of the app.
-"$Executable" &
-"$Executable" showAt 0 0 9999 9999
-
-"$Executable" add "Plain text item"
-"$Executable" add "Unicode: "
-"$Executable" 'write(mimeText, "Highlighted item", mimeColor, "#ff0")'
-"$Executable" 'write(mimeText, "Item with notes", mimeItemNotes, "Notes...")'
-"$Executable" 'write(mimeText, "Item with tags", plugins.itemtags.mimeTags, "important")'
-"$Executable" write text/html "<p><b>Rich text</b> <i>item</i></p>"
-"$Executable" write image/png - < "$Source/src/images/icon_128x128.png"
-
-# FIXME: This does not show notifications.
-#        Maybe a user interaction, like mouse move, is required.
-"$Executable" popup "Popup title" "Popup message..."
-"$Executable" notification \
-    .title "Notification title" \
-    .message "Notification message..." \
-    .button OK cmd data \
-    .button Close cmd data
-
-"$Executable" screenshot > screenshot.png
-
-"$Executable" exit
-wait
-
 export PATH=$OldPath
-
-appveyor PushArtifact screenshot.png -DeploymentName "App Screenshot"
 
 choco install -y InnoSetup
 cmd " /c C:/ProgramData/chocolatey/bin/ISCC.exe /O$APPVEYOR_BUILD_FOLDER /DAppVersion=$APP_VERSION /DRoot=$Destination /DSource=$Source $Source/Shared/copyq.iss"
+
+installer="$APPVEYOR_BUILD_FOLDER/copyq-$APP_VERSION-setup.exe"
+appveyor PushArtifact "$installer" -DeploymentName "CopyQ Setup"
+
+# Test installer
+cmd " /c $installer /VERYSILENT /SUPPRESSMSGBOXES"
+"C:/Program Files/CopyQ/copyq.exe" --version
+
+# Test installer can close the app safely
+(
+    # Wait for CopyQ to start
+    "C:/Program Files/CopyQ/copyq.exe" ""
+    cmd " /c $installer /VERYSILENT /SUPPRESSMSGBOXES"
+    echo "Installation finished"
+) &
+installer_pid=$!
+export COPYQ_LOG_LEVEL=DEBUG
+"C:/Program Files/CopyQ/copyq.exe"
+wait "$installer_pid"
+
+gpgconf --kill all
+
+echo "All OK"

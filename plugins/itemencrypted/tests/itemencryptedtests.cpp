@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "itemencryptedtests.h"
 
@@ -42,6 +25,8 @@ void ItemEncryptedTests::cleanupTestCase()
 void ItemEncryptedTests::init()
 {
     TEST(m_test->init());
+
+    QVERIFY(isGpgInstalled());
 }
 
 void ItemEncryptedTests::cleanup()
@@ -51,13 +36,10 @@ void ItemEncryptedTests::cleanup()
 
 void ItemEncryptedTests::encryptDecryptData()
 {
-    if ( !isGpgInstalled() )
-        SKIP("gpg2 is required to run the test");
-
-    RUN("-e" << "plugins.itemencrypted.generateTestKeys()", "\n");
+    RUN("plugins.itemencrypted.generateTestKeys()", "\n");
 
     // Test gpg errors first.
-    RUN("-e" << "plugins.itemencrypted.encrypt(input());print('')", "");
+    RUN("plugins.itemencrypted.encrypt(input());print('')", "");
 
     const QByteArray input("\x00\x01\x02\x03\x04", 5);
     QByteArray stdoutActual;
@@ -77,10 +59,7 @@ void ItemEncryptedTests::encryptDecryptItems()
     SKIP("Ctrl+L shortcut doesn't seem work on OS X");
 #endif
 
-    if ( !isGpgInstalled() )
-        SKIP("gpg2 is required to run the test");
-
-    RUN("-e" << "plugins.itemencrypted.generateTestKeys()", "\n");
+    RUN("plugins.itemencrypted.generateTestKeys()", "\n");
 
     // Load commands from the plugin generating keys.
     RUN("keys" << "Ctrl+P" << "ENTER", "");

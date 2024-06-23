@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "tabicons.h"
 
@@ -54,14 +37,15 @@ QByteArray tabNameFromFileSuffix(QByteArray base64Suffix)
 
 } // namespace
 
-QStringList savedTabs()
+QList<QString> savedTabs()
 {
-    QStringList tabs = AppConfig().option<Config::tabs>();
+    QList<QString> tabs = AppConfig().option<Config::tabs>();
 
     const QString configPath = settingsDirectoryPath();
 
-    QStringList files = QDir(configPath).entryList(QStringList("*_tab_*.dat"));
-    files.append( QDir(configPath).entryList(QStringList("*_tab_*.dat.tmp")) );
+    QDir configDir(configPath);
+    QList<QString> files = configDir.entryList({QStringLiteral("*_tab_*.dat")});
+    files.append(configDir.entryList({QStringLiteral("*_tab_*.dat.tmp")}));
 
     QRegularExpression re("_tab_([^.]*)");
 
@@ -148,7 +132,7 @@ void setDefaultTabItemCounterStyle(QWidget *widget)
     widget->setPalette(pal);
 }
 
-void setComboBoxItems(QComboBox *comboBox, const QStringList &items)
+void setComboBoxItems(QComboBox *comboBox, const QList<QString> &items)
 {
     const QString text = comboBox->currentText();
     comboBox->clear();

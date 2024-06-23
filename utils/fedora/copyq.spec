@@ -28,8 +28,8 @@ support for image formats, command line control and more.
 %prep
 chmod 644 %{SOURCE0}
 %setup -qn %{project}-%{revision}
-sed -i 's/^set(copyq_version .*)$/set(copyq_version "v%{version}-%{snapinfo}")/' version.cmake
-grep -Fq '"v%{version}-%{snapinfo}"' version.cmake
+sed -i 's/^set(copyq_version .*)$/set(copyq_version "%{version}-%{snapinfo}")/' src/version.cmake
+grep -Fq '"v%{version}-%{snapinfo}"' src/version.cmake
 
 %build
 %cmake_kf5 \
@@ -227,10 +227,10 @@ appstream-util validate-relax --nonet $RPM_BUILD_ROOT%{_datadir}/metainfo/com.gi
 - Upstream release rhbz#1332032
 
 * Sun Feb 14 2016 Gerald Cox <gbcox@fedoraproject.org> - 2.6.1-1
-- Upstream releease rhbz#1308340
+- Upstream release rhbz#1308340
 
 * Sat Feb 06 2016 Gerald Cox <gbcox@fedoraproject.org> - 2.6.0-1
-- Upstream releease rhbz#1305247
+- Upstream release rhbz#1305247
 
 * Wed Feb 03 2016 Fedora Release Engineering <releng@fedoraproject.org> - 2.5.0-2
 - Rebuilt for https://fedoraproject.org/wiki/Fedora_24_Mass_Rebuild

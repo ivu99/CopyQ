@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "clipboardserver.h"
 
@@ -24,6 +7,7 @@
 #include "common/clientsocket.h"
 #include "common/client_server.h"
 #include "common/commandstatus.h"
+#include "common/config.h"
 #include "common/display.h"
 #include "common/log.h"
 #include "common/mimetypes.h"
@@ -39,12 +23,14 @@
 #include "gui/notificationbutton.h"
 #include "gui/notificationdaemon.h"
 #include "item/itemfactory.h"
+#include "item/itemstore.h"
 #include "item/serialize.h"
 #include "scriptable/scriptableproxy.h"
 
 #include <QAction>
 #include <QApplication>
 #include <QApplicationStateChangeEvent>
+#include <QFile>
 #include <QKeyEvent>
 #include <QMenu>
 #include <QMessageBox>
@@ -53,10 +39,10 @@
 #include <QStyleFactory>
 #include <QTextEdit>
 
-#ifdef NO_GLOBAL_SHORTCUTS
-class QxtGlobalShortcut final {};
-#else
+#ifdef COPYQ_GLOBAL_SHORTCUTS
 #include "../qxt/qxtglobalshortcut.h"
+#else
+class QxtGlobalShortcut final {};
 #endif
 
 #include <memory>
@@ -107,17 +93,14 @@ ClipboardServer::ClipboardServer(QApplication *app, const QString &sessionName)
 {
     setLogLabel("Server");
 
-    const QString serverName = clipboardServerName();
-    m_server = new Server(serverName, this);
+    m_server = new Server(clipboardServerName(), this);
 
     if ( m_server->isListening() ) {
-        ::createSessionMutex();
-        restoreSettings(true);
-        COPYQ_LOG("Server \"" + serverName + "\" started.");
+        App::installTranslator();
+        qApp->setLayoutDirection(QLocale().textDirection());
     } else {
-        restoreSettings(false);
+        App::installTranslator();
         if ( canUseStandardOutput() ) {
-            COPYQ_LOG("Server \"" + serverName + "\" already running!");
             log( tr("CopyQ server is already running."), LogWarning );
         }
         exit(0);
@@ -125,15 +108,21 @@ ClipboardServer::ClipboardServer(QApplication *app, const QString &sessionName)
     }
 
     if ( sessionName.isEmpty() ) {
-        QGuiApplication::setApplicationDisplayName("CopyQ");
+        QGuiApplication::setApplicationDisplayName(QStringLiteral("CopyQ"));
     } else {
         QGuiApplication::setApplicationDisplayName(
-            QString::fromLatin1("CopyQ-%1").arg(sessionName));
+            QStringLiteral("CopyQ-%1").arg(sessionName));
     }
 
+    QGuiApplication::setDesktopFileName(QStringLiteral("com.github.hluk.copyq"));
+
+#if QT_VERSION < QT_VERSION_CHECK(6,0,0)
     QCoreApplication::setAttribute(Qt::AA_UseHighDpiPixmaps, true);
+#endif
 
     QApplication::setQuitOnLastWindowClosed(false);
+
+    ensureSettingsDirectoryExists();
 
     m_sharedData = std::make_shared<ClipboardBrowserShared>();
     m_sharedData->itemFactory = new ItemFactory(this);
@@ -156,7 +145,7 @@ ClipboardServer::ClipboardServer(QApplication *app, const QString &sessionName)
 
     connect( qApp, &QGuiApplication::commitDataRequest, this, &ClipboardServer::onCommitData );
     connect( qApp, &QGuiApplication::saveStateRequest, this, &ClipboardServer::onSaveState );
-#if QT_VERSION >= QT_VERSION_CHECK(5,6,0)
+#if QT_VERSION < QT_VERSION_CHECK(6,0,0)
     qApp->setFallbackSessionManagementEnabled(false);
 #endif
 
@@ -174,14 +163,17 @@ ClipboardServer::ClipboardServer(QApplication *app, const QString &sessionName)
     connect( m_wnd, &MainWindow::commandsSaved,
              this, &ClipboardServer::onCommandsSaved );
 
-    loadSettings();
+    m_server->start();
+
+    {
+        AppConfig appConfig;
+        loadSettings(&appConfig);
+    }
 
     m_wnd->setCurrentTab(0);
     m_wnd->enterBrowseMode();
 
     qApp->installEventFilter(this);
-
-    m_server->start();
 
     // Ignore global shortcut key presses in any widget.
     m_ignoreKeysTimer.setInterval(100);
@@ -191,11 +183,17 @@ ClipboardServer::ClipboardServer(QApplication *app, const QString &sessionName)
         m_actionDataToSend.clear();
     });
 
-    initSingleShotTimer(&m_updateThemeTimer, 1000, this, &ClipboardServer::loadSettings);
+    initSingleShotTimer(&m_timerCleanItemFiles, 120000, this, &ClipboardServer::cleanDataFiles);
 
+    initSingleShotTimer(&m_updateThemeTimer, 1000, this, [this](){
+        AppConfig appConfig;
+        loadSettings(&appConfig);
+    });
+
+    setClipboardMonitorRunning(false);
     startMonitoring();
 
-    callback("onStart");
+    callback(QStringLiteral("onStart"));
 }
 
 ClipboardServer::~ClipboardServer()
@@ -221,6 +219,7 @@ void ClipboardServer::stopMonitoring()
         return;
 
     COPYQ_LOG("Terminating monitor");
+    setClipboardMonitorRunning(false);
 
     const auto client = findClient(m_monitor->id());
     if (client)
@@ -235,7 +234,7 @@ void ClipboardServer::startMonitoring()
     COPYQ_LOG("Starting monitor");
 
     m_monitor = new Action();
-    m_monitor->setCommand("copyq --clipboard-access monitorClipboard");
+    m_monitor->setCommand(QStringLiteral("copyq --clipboard-access monitorClipboard"));
     connect( m_monitor.data(), &QObject::destroyed,
              this, &ClipboardServer::onMonitorFinished );
     m_sharedData->actions->internalAction(m_monitor);
@@ -250,7 +249,7 @@ void ClipboardServer::removeGlobalShortcuts()
 
 void ClipboardServer::onCommandsSaved(const QVector<Command> &commands)
 {
-#ifndef NO_GLOBAL_SHORTCUTS
+#ifdef COPYQ_GLOBAL_SHORTCUTS
     removeGlobalShortcuts();
 
     QList<QKeySequence> usedShortcuts;
@@ -287,7 +286,7 @@ void ClipboardServer::onAboutToQuit()
         return;
     m_exitting = true;
 
-    callback("onExit");
+    callback(QStringLiteral("onExit"));
     waitForCallbackToFinish();
 
     m_ignoreNewConnections = true;
@@ -297,6 +296,7 @@ void ClipboardServer::onAboutToQuit()
     terminateClients(5000);
 
     m_wnd->saveTabs();
+    cleanDataFiles();
 }
 
 void ClipboardServer::onCommitData(QSessionManager &sessionManager)
@@ -439,7 +439,7 @@ void ClipboardServer::callback(const QString &scriptFunction)
         return;
 
     waitForCallbackToFinish();
-    COPYQ_LOG( QString("Starting callback: %1").arg(scriptFunction) );
+    COPYQ_LOG( QStringLiteral("Starting callback: %1").arg(scriptFunction) );
     m_callback = new Action();
     m_callback->setCommand(QStringList() << "copyq" << scriptFunction);
     m_sharedData->actions->internalAction(m_callback);
@@ -465,6 +465,12 @@ void ClipboardServer::sendActionData(int actionId, const QByteArray &bytes)
         m_actionDataToSend[actionId] = bytes;
         m_timerClearUnsentActionData.start();
     }
+}
+
+void ClipboardServer::cleanDataFiles()
+{
+    COPYQ_LOG("Cleaning unused item files");
+    ::cleanDataFiles( m_wnd->tabs() );
 }
 
 void ClipboardServer::onClientNewConnection(const ClientSocketPtr &client)
@@ -517,7 +523,7 @@ void ClipboardServer::onClientMessageReceived(
         break;
     }
     default:
-        log(QString("Unhandled command status: %1").arg(messageCode));
+        log(QStringLiteral("Unhandled command status: %1").arg(messageCode));
         break;
     }
 }
@@ -536,6 +542,8 @@ void ClipboardServer::onClientConnectionFailed(ClientSocketId clientId)
 void ClipboardServer::onMonitorFinished()
 {
     COPYQ_LOG("Monitor finished");
+    if (!m_monitor)
+        setClipboardMonitorRunning(false);
     stopMonitoring();
     startMonitoring();
 }
@@ -559,13 +567,13 @@ void ClipboardServer::onNotificationButtonClicked(const NotificationButton &butt
 
 void ClipboardServer::createGlobalShortcut(const QKeySequence &shortcut, const Command &command)
 {
-#ifdef NO_GLOBAL_SHORTCUTS
+#ifndef COPYQ_GLOBAL_SHORTCUTS
     Q_UNUSED(shortcut)
     Q_UNUSED(command)
 #else
     auto s = new QxtGlobalShortcut(shortcut, this);
     if (!s->isValid()) {
-        log(QString("Failed to set global shortcut \"%1\" for command \"%2\".")
+        log(QStringLiteral("Failed to set global shortcut \"%1\" for command \"%2\".")
             .arg(shortcut.toString(),
                  command.name),
             LogWarning);
@@ -633,8 +641,9 @@ bool ClipboardServer::eventFilter(QObject *object, QEvent *ev)
         const auto stateChangeEvent = static_cast<QApplicationStateChangeEvent*>(ev);
         const auto state = stateChangeEvent->applicationState();
         if (state != Qt::ApplicationActive) {
-            COPYQ_LOG( QString("Saving items on application state change (%1)").arg(state) );
+            COPYQ_LOG( QStringLiteral("Saving items on application state change (%1)").arg(state) );
             m_wnd->saveTabs();
+            m_timerCleanItemFiles.start();
         }
     } else if (type == QEvent::ThemeChange) {
         if ( !m_updateThemeTimer.isActive() )
@@ -645,60 +654,89 @@ bool ClipboardServer::eventFilter(QObject *object, QEvent *ev)
     return false;
 }
 
-void ClipboardServer::loadSettings()
+void ClipboardServer::loadSettings(AppConfig *appConfig)
 {
     if (!m_sharedData->itemFactory)
         return;
 
     COPYQ_LOG("Loading configuration");
 
-    QSettings settings;
+    QSettings &settings = appConfig->settings();
 
     m_sharedData->itemFactory->loadItemFactorySettings(&settings);
 
-    AppConfig appConfig;
-
-    const QString styleName = appConfig.option<Config::style>();
+    const QString styleName = appConfig->option<Config::style>();
     if ( !styleName.isEmpty() ) {
-        log( QString("Style: %1").arg(styleName) );
+        log( QStringLiteral("Style: %1").arg(styleName) );
         QStyle *style = QStyleFactory::create(styleName);
         if (style) {
             QApplication::setStyle(style);
         } else {
-            const QString styles = QStyleFactory::keys().join(", ");
-            log( QString("Failed to set style, valid are: %1").arg(styles), LogWarning );
+            const QString styles = QStyleFactory::keys().join(QLatin1String(", "));
+            log( QStringLiteral("Failed to set style, valid are: %1").arg(styles), LogWarning );
         }
     }
 
-    settings.beginGroup("Theme");
+    settings.beginGroup(QStringLiteral("Theme"));
     m_sharedData->theme.loadTheme(settings);
     settings.endGroup();
 
-    m_sharedData->editor = appConfig.option<Config::editor>();
-    m_sharedData->maxItems = appConfig.option<Config::maxitems>();
-    m_sharedData->textWrap = appConfig.option<Config::text_wrap>();
-    m_sharedData->viMode = appConfig.option<Config::vi>();
-    m_sharedData->saveOnReturnKey = !appConfig.option<Config::edit_ctrl_return>();
-    m_sharedData->moveItemOnReturnKey = appConfig.option<Config::move>();
-    m_sharedData->showSimpleItems = appConfig.option<Config::show_simple_items>();
-    m_sharedData->numberSearch = appConfig.option<Config::number_search>();
-    m_sharedData->minutesToExpire = appConfig.option<Config::expire_tab>();
-    m_sharedData->saveDelayMsOnItemAdded = appConfig.option<Config::save_delay_ms_on_item_added>();
-    m_sharedData->saveDelayMsOnItemModified = appConfig.option<Config::save_delay_ms_on_item_modified>();
-    m_sharedData->saveDelayMsOnItemRemoved = appConfig.option<Config::save_delay_ms_on_item_removed>();
-    m_sharedData->saveDelayMsOnItemMoved = appConfig.option<Config::save_delay_ms_on_item_moved>();
-    m_sharedData->saveDelayMsOnItemEdited = appConfig.option<Config::save_delay_ms_on_item_edited>();
-    m_sharedData->rowIndexFromOne = appConfig.option<Config::row_index_from_one>();
+    m_sharedData->editor = appConfig->option<Config::editor>();
+    m_sharedData->maxItems = appConfig->option<Config::maxitems>();
+    m_sharedData->textWrap = appConfig->option<Config::text_wrap>();
+    m_sharedData->viMode = appConfig->option<Config::vi>();
+    m_sharedData->saveOnReturnKey = !appConfig->option<Config::edit_ctrl_return>();
+    m_sharedData->moveItemOnReturnKey = appConfig->option<Config::move>();
+    m_sharedData->showSimpleItems = appConfig->option<Config::show_simple_items>();
+    m_sharedData->numberSearch = appConfig->option<Config::number_search>();
+    m_sharedData->minutesToExpire = appConfig->option<Config::expire_tab>();
+    m_sharedData->saveDelayMsOnItemAdded = appConfig->option<Config::save_delay_ms_on_item_added>();
+    m_sharedData->saveDelayMsOnItemModified = appConfig->option<Config::save_delay_ms_on_item_modified>();
+    m_sharedData->saveDelayMsOnItemRemoved = appConfig->option<Config::save_delay_ms_on_item_removed>();
+    m_sharedData->saveDelayMsOnItemMoved = appConfig->option<Config::save_delay_ms_on_item_moved>();
+    m_sharedData->saveDelayMsOnItemEdited = appConfig->option<Config::save_delay_ms_on_item_edited>();
+    m_sharedData->rowIndexFromOne = appConfig->option<Config::row_index_from_one>();
+
+    m_sharedData->actions->setMaxRowCount(appConfig->option<Config::max_process_manager_rows>());
 
     m_wnd->loadSettings(settings, appConfig);
 
-    m_textTabSize = appConfig.option<Config::text_tab_width>();
-    m_saveOnDeactivate = appConfig.option<Config::save_on_app_deactivated>();
+    m_textTabSize = appConfig->option<Config::text_tab_width>();
+    m_saveOnDeactivate = appConfig->option<Config::save_on_app_deactivated>();
 
     if (m_monitor) {
         stopMonitoring();
         startMonitoring();
     }
+
+    m_sharedData->notifications->setNativeNotificationsEnabled(
+        appConfig->option<Config::native_notifications>() );
+    m_sharedData->notifications->setNotificationOpacity(
+        m_sharedData->theme.color(QStringLiteral("notification_bg")).alphaF() );
+    m_sharedData->notifications->setNotificationStyleSheet(
+        m_sharedData->theme.getNotificationStyleSheet() );
+
+    int id = appConfig->option<Config::notification_position>();
+    NotificationDaemon::Position position;
+    switch (id) {
+    case 0: position = NotificationDaemon::Top; break;
+    case 1: position = NotificationDaemon::Bottom; break;
+    case 2: position = NotificationDaemon::TopRight; break;
+    case 3: position = NotificationDaemon::BottomRight; break;
+    case 4: position = NotificationDaemon::BottomLeft; break;
+    default: position = NotificationDaemon::TopLeft; break;
+    }
+    m_sharedData->notifications->setPosition(position);
+
+    const int x = appConfig->option<Config::notification_horizontal_offset>();
+    const int y = appConfig->option<Config::notification_vertical_offset>();
+    m_sharedData->notifications->setOffset(x, y);
+
+    const int w = appConfig->option<Config::notification_maximum_width>();
+    const int h = appConfig->option<Config::notification_maximum_height>();
+    m_sharedData->notifications->setMaximumSize(w, h);
+
+    m_sharedData->notifications->updateNotificationWidgets();
 
     m_updateThemeTimer.stop();
 
@@ -707,7 +745,7 @@ void ClipboardServer::loadSettings()
 
 void ClipboardServer::shortcutActivated(QxtGlobalShortcut *shortcut)
 {
-#ifdef NO_GLOBAL_SHORTCUTS
+#ifndef COPYQ_GLOBAL_SHORTCUTS
     Q_UNUSED(shortcut)
 #else
     m_ignoreKeysTimer.start();

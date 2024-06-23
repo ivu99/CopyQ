@@ -9,10 +9,14 @@ base_url="https://download.opensuse.org/repositories/home:/"
 url=$base_url$user:/$project
 
 xdeb="-1_amd64.deb"
+xdeb_armhf="-1_armhf.deb"
+xdeb_arm64="-1_arm64.deb"
 xrpm=".x86_64.rpm"
 
 pkg="${project}_${version}"
 pkg_deb="amd64/${pkg}${xdeb}"
+pkg_deb_armhf="armhf/${pkg}${xdeb_armhf}"
+pkg_deb_arm64="arm64/${pkg}${xdeb_arm64}"
 pkg_rpm="x86_64/${project}-${version}-${rpm_version}${xrpm}"
 
 failed=""
@@ -33,9 +37,12 @@ if [ -z "$version" ]; then
 fi
 
 fetch_package "${pkg}_openSUSE_Tumbleweed${xrpm}" "$url/openSUSE_Tumbleweed/${pkg_rpm}"
-fetch_package "${pkg}_openSUSE_Leap_15.2${xrpm}"  "$url/openSUSE_Leap_15.2/x86_64/${project}-${version}-lp152.${rpm_version}${xrpm}"
-fetch_package "${pkg}_openSUSE_Leap_15.3${xrpm}"  "$url/openSUSE_Leap_15.3/x86_64/${project}-${version}-lp153.${rpm_version}${xrpm}"
+fetch_package "${pkg}_openSUSE_Leap_15.4${xrpm}"  "$url/15.4/x86_64/${project}-${version}-lp154.${rpm_version}${xrpm}"
 fetch_package "${pkg}_Debian_10${xdeb}"           "$url/Debian_10/${pkg_deb}"
+fetch_package "${pkg}_Debian_11${xdeb}"           "$url/Debian_11/${pkg_deb}"
+fetch_package "${pkg}_Debian_12${xdeb}"           "$url/Debian_12/${pkg_deb}"
+fetch_package "${pkg}_Raspbian_12${xdeb_armhf}"   "$url/Raspbian_12/${pkg_deb_armhf}"
+fetch_package "${pkg}_Raspbian_12${xdeb_arm64}"   "$url/Raspbian_12/${pkg_deb_arm64}"
 
 if [ -n "$failed" ]; then
     echo -e "Failed packages:$failed"

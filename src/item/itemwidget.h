@@ -1,41 +1,26 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #ifndef ITEMWIDGET_H
 #define ITEMWIDGET_H
 
 #include "tests/testinterface.h"
 
-#include <QStringList>
-#include <QtPlugin>
-#include <QVariantMap>
-#include <QVector>
-#include <QWidget>
+#include <QObject>
+#include <QtContainerFwd>
 
 #include <memory>
 
+struct Command;
+
 class ItemFilter;
+class TestInterface;
 class QAbstractItemModel;
-class QTextEdit;
 class QIODevice;
 class QModelIndex;
-struct Command;
+class QPersistentModelIndex;
+class QSettings;
+class QTextEdit;
+class QWidget;
 
 class ItemLoaderInterface;
 using ItemLoaderPtr = std::shared_ptr<ItemLoaderInterface>;
@@ -46,7 +31,9 @@ using ItemSaverPtr = std::shared_ptr<ItemSaverInterface>;
 class ItemScriptableFactoryInterface;
 using ItemScriptableFactoryPtr = std::shared_ptr<ItemScriptableFactoryInterface>;
 
-#define COPYQ_PLUGIN_ITEM_LOADER_ID "com.github.hluk.copyq.itemloader/4.0.0"
+using TestInterfacePtr = std::shared_ptr<TestInterface>;
+
+#define COPYQ_PLUGIN_ITEM_LOADER_ID "com.github.hluk.copyq.itemloader/9.0.0"
 
 /**
  * Handles item in list.
@@ -64,7 +51,7 @@ public:
     QWidget *widget() const { return m_widget; }
 
     /**
-     * Size of widget needs to be updated (because maximum size chaged).
+     * Size of widget needs to be updated (because maximum size changed).
      */
     virtual void updateSize(QSize maximumSize, int idealWidth);
 
@@ -218,7 +205,7 @@ public:
     /**
      * Called when items are being deleted by user.
      */
-    virtual void itemsRemovedByUser(const QList<QModelIndex> &indexList);
+    virtual void itemsRemovedByUser(const QList<QPersistentModelIndex> &indexList);
 
     /**
      * Return copy of items data.
@@ -294,26 +281,27 @@ public:
      *
      * Default is no icon.
      */
-    virtual QVariant icon() const { return QVariant(); }
+    virtual QVariant icon() const = 0;
 
     /**
      * Provide formats to save (possibly configurable).
      *
      * The values are stored into user QSettings, under group with name same as value of id().
      */
-    virtual QStringList formatsToSave() const { return QStringList(); }
+    virtual QStringList formatsToSave() const;
 
     /**
      * Save and return configuration values to save from current settings widget.
      */
-    virtual QVariantMap applySettings() { return QVariantMap(); }
+    virtual void applySettings(QSettings &) {}
 
-    virtual void setEnabled(bool) {}
+    virtual void setEnabled(bool enabled) { m_enabled = enabled; }
+    bool isEnabled() const { return m_enabled; }
 
     /**
      * Load stored configuration values.
      */
-    virtual void loadSettings(const QVariantMap &) {}
+    virtual void loadSettings(const QSettings &) {}
 
     /**
      * Create settings widget.
@@ -406,6 +394,9 @@ public:
 
     ItemLoaderInterface(const ItemLoaderInterface &) = delete;
     ItemLoaderInterface &operator=(const ItemLoaderInterface &) = delete;
+
+private:
+    bool m_enabled = true;
 };
 
 Q_DECLARE_INTERFACE(ItemLoaderInterface, COPYQ_PLUGIN_ITEM_LOADER_ID)

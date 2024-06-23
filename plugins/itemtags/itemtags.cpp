@@ -1,21 +1,4 @@
-/*
-    Copyright (c) 2020, Lukas Holecek <hluk@email.cz>
-
-    This file is part of CopyQ.
-
-    CopyQ is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-
-    CopyQ is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with CopyQ.  If not, see <http://www.gnu.org/licenses/>.
-*/
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "itemtags.h"
 #include "ui_itemtagssettings.h"
@@ -181,17 +164,14 @@ void addTagCommands(const QString &tagName, const QString &match, QVector<Comman
 
     const QString name = !tagName.isEmpty() ? tagName : match;
     const QString tagString = toScriptString(name);
+    const QString quotedTag = quoteString(name);
 
     c = dummyTagCommand();
-    c.name = ItemTagsLoader::tr("Tag as %1").arg(quoteString(name));
-    c.matchCmd = "copyq: plugins.itemtags.hasTag(" + tagString + ") && fail()";
-    c.cmd = "copyq: plugins.itemtags.tag(" + tagString + ")";
-    commands->append(c);
-
-    c = dummyTagCommand();
-    c.name = ItemTagsLoader::tr("Remove tag %1").arg(quoteString(name));
-    c.matchCmd = "copyq: plugins.itemtags.hasTag(" + tagString + ") || fail()";
-    c.cmd = "copyq: plugins.itemtags.untag(" + tagString + ")";
+    c.internalId = QStringLiteral("copyq_tags_tag:") + name;
+    c.name = ItemTagsLoader::tr("Toggle Tag %1").arg(quotedTag);
+    c.cmd = QStringLiteral(
+        "copyq: (plugins.itemtags.hasTag(%1) ? plugins.itemtags.untag : plugins.itemtags.tag)(%1)"
+    ).arg(tagString);
     commands->append(c);
 }
 
@@ -222,7 +202,7 @@ void initTagWidget(QWidget *tagWidget, const ItemTags::Tag &tag, const QFont &fo
 
     auto layout = new QHBoxLayout(tagWidget);
     const int x = QFontMetrics(font).height() / 6;
-    layout->setContentsMargins(x, x, x, x);
+    layout->setContentsMargins(x, 0, x, 0);
     layout->setSpacing(x * 2);
 
     if (tag.icon.size() > 1) {
@@ -263,6 +243,9 @@ void addTagButtons(QBoxLayout *layout, const ItemTags::Tags &tags)
     const QFont font = smallerFont(layout->parentWidget()->font());
 
     for (const auto &tag : tags) {
+        if ( tag.name.isEmpty() && tag.icon.isEmpty() )
+            continue;
+
         QWidget *tagWidget = new QWidget(layout->parentWidget());
         initTagWidget(tagWidget, tag, font);
         layout->addWidget(tagWidget);
@@ -364,14 +347,14 @@ ItemTags::ItemTags(ItemWidget *childItem, const Tags &tags)
     , m_tagWidget(new QWidget(childItem->widget()->parentWidget()))
 {
     QBoxLayout *tagLayout = new QHBoxLayout(m_tagWidget);
-    tagLayout->setMargin(0);
+    tagLayout->setContentsMargins({});
     addTagButtons(tagLayout, tags);
 
     childItem->widget()->setObjectName("item_child");
     childItem->widget()->setParent(this);
 
     QBoxLayout *layout = new QVBoxLayout(this);
-    layout->setMargin(0);
+    layout->setContentsMargins({});
     layout->setSpacing(0);
 
     layout->addWidget(m_tagWidget, 0);
@@ -647,31 +630,23 @@ QStringList ItemTagsLoader::formatsToSave() const
     return QStringList(mimeTags);
 }
 
-QVariantMap ItemTagsLoader::applySettings()
+void ItemTagsLoader::applySettings(QSettings &settings)
 {
-    m_tags.clear();
-
     QStringList tags;
 
     for (int row = 0; row < ui->tableWidget->rowCount(); ++row) {
         const Tag tag = tagFromTable(row);
-        if (isTagValid(tag)) {
+        if (isTagValid(tag))
             tags.append(serializeTag(tag));
-            m_tags.append(tag);
-        }
     }
 
-    m_settings.insert(configTags, tags);
-
-    return m_settings;
+    settings.setValue(configTags, tags);
 }
 
-void ItemTagsLoader::loadSettings(const QVariantMap &settings)
+void ItemTagsLoader::loadSettings(const QSettings &settings)
 {
-    m_settings = settings;
-
     m_tags.clear();
-    for (const auto &tagField : m_settings.value(configTags).toStringList()) {
+    for (const auto &tagField : settings.value(configTags).toStringList()) {
         Tag tag = deserializeTag(tagField);
         if (isTagValid(tag))
             m_tags.append(tag);
@@ -728,7 +703,7 @@ bool ItemTagsLoader::matches(const QModelIndex &index, const ItemFilter &filter)
     const QByteArray tagsData =
             index.data(contentType::data).toMap().value(mimeTags).toByteArray();
     const auto tags = getTextData(tagsData);
-    return filter.matches(tags);
+    return filter.matches(tags) || filter.matches(accentsRemoved(tags));
 }
 
 QObject *ItemTagsLoader::tests(const TestInterfacePtr &test) const
@@ -766,24 +741,33 @@ QVector<Command> ItemTagsLoader::commands() const
     if (m_tags.isEmpty()) {
         addTagCommands(tr("Important", "Tag name for example command"), QString(), &commands);
     } else {
-        for (const auto &tag : m_tags)
+        const QRegularExpression reCapture(R"(\(.*\))");
+        const QRegularExpression reGroup(R"(\\\d)");
+        for (const auto &tag : m_tags) {
+            if ( reCapture.match(tag.match).hasMatch() && reGroup.match(tag.name).hasMatch() )
+                continue;
+
             addTagCommands(tag.name, tag.match, &commands);
+        }
     }
 
     Command c;
 
     c = dummyTagCommand();
+    c.internalId = QStringLiteral("copyq_tags_tag");
     c.name = addTagText();
     c.cmd = "copyq: plugins.itemtags.tag()";
     commands.append(c);
 
     c = dummyTagCommand();
+    c.internalId = QStringLiteral("copyq_tags_untag");
     c.input = mimeTags;
     c.name = removeTagText();
     c.cmd = "copyq: plugins.itemtags.untag()";
     commands.append(c);
 
     c = dummyTagCommand();
+    c.internalId = QStringLiteral("copyq_tags_clear");
     c.input = mimeTags;
     c.name = tr("Clear all tags");
     c.cmd = "copyq: plugins.itemtags.clearTags()";
@@ -910,6 +894,8 @@ void ItemTagsLoader::addTagToSettingsTable(const ItemTagsLoader::Tag &tag)
 
     auto lock = new QTableWidgetItem();
     lock->setCheckState(tag.lock ? Qt::Checked : Qt::Unchecked);
+    const QString toolTip = t->horizontalHeaderItem(tagsTableColumns::lock)->toolTip();
+    lock->setToolTip(toolTip);
     t->setItem( row, tagsTableColumns::lock, lock );
 
     auto colorButton = new QPushButton(t);
